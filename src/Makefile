@@ -2,17 +2,19 @@ RFUNFILES=Ast.hs MainWeb.hs MainRFun.hs Parser.hs PrettyPrinter.hs TypeCheck.hs 
 COREFILES=MainCore.hs Core/Ast.hs Core/Interp.hs Core/Parser.hs Core/Preparse.hs Core/RFun2Prog.hs
 BNFC=rfun.cf
 
+DEPS=-package megaparsec -package containers -package mtl -package pretty
+
 rfun: $(RFUNFILES)
-	ghc --make -o rfun -Wall -fno-warn-unused-do-bind -XGeneralizedNewtypeDeriving MainRFun.hs
+	ghc --make $(DEPS) -o rfun -Wall -fno-warn-unused-do-bind -XGeneralizedNewtypeDeriving MainRFun.hs
 
 core: $(COREFILES)
-	ghc --make -o rfunCore -Wall -fno-warn-unused-do-bind -XGeneralizedNewtypeDeriving MainCore.hs
+	ghc --make $(DEPS) -o rfunCore -Wall -fno-warn-unused-do-bind -XGeneralizedNewtypeDeriving MainCore.hs
 
 web: $(RFUNFILES)
-	ghc -O2 -o ../bin/rfun -rtsopts --make -XGeneralizedNewtypeDeriving MainWeb.hs
+	ghc -O2 -o ../bin/rfun -rtsopts --make $(DEPS) -XGeneralizedNewtypeDeriving MainWeb.hs
 
 optimized opt: $(RFUNFILES)
-	ghc -O2 -o ../bin/rfun -rtsopts --make -XGeneralizedNewtypeDeriving MainRFun.hs
+	ghc -O2 -o ../bin/rfun -rtsopts --make $(DEPS) -XGeneralizedNewtypeDeriving MainRFun.hs
 
 haddock h: $(RFUNFILES)
 	haddock -h -o ../docs/ MainRFun.hs

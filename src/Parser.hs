@@ -19,16 +19,19 @@ import Ast
 import Control.Applicative (empty)
 import Control.Monad (void, guard, when, forM_)
 import Text.Megaparsec
-import Text.Megaparsec.String
-import qualified Text.Megaparsec.Lexer as L
+import Text.Megaparsec.Char
+import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Data.Map as M
+import Data.Void ( Void )
 
 -- import Data.Complex
 
-type ParserError = ParseError Char Dec
+type ParserError = ParseErrorBundle String Void
+
+type Parser = Parsec Void String
 
 prettyParseError :: ParserError -> String
-prettyParseError = parseErrorPretty
+prettyParseError = errorBundlePretty
 
 parseFromFile :: FilePath -> IO (Either ParserError Program)
 parseFromFile fname =
@@ -60,7 +63,7 @@ programParser = pProgram <* scn <* eof
 ---
 
 integer :: Parser Integer
-integer = lexeme $ L.signed sc L.integer
+integer = lexeme $ L.signed sc L.decimal
 
 
 symbol :: String -> Parser ()
@@ -83,7 +86,7 @@ pIdentifier = (lexeme $ p)
   where
     p = do
       lookAhead lowerChar
-      pos <- getPosition
+      pos <- getSourcePos
       str <- some (alphaNumChar <|> char '-' <|> char '_' <|> char '\'' <?> "identifier that is not a keyword: " ++ show reservedWords)
       guard (not $ elem str reservedWords)
       return $ Ident str pos
@@ -93,7 +96,7 @@ pConstructor = lexeme $ p
   where
     p = do
       lookAhead upperChar
-      pos <- getPosition
+      pos <- getSourcePos
       str <- some (alphaNumChar <|> char '-' <|> char '_' <?> "constructor name")
       return $ Ident str pos
 

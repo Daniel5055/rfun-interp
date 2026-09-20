@@ -98,4 +98,4 @@ makeFunEnv :: Program -> FuncEnv
 makeFunEnv p = M.fromList $ map (\x -> ((identifier. funcName) x, x)) p
 
 makeIdent :: String -> Ident
-makeIdent s = Ident s (P.SourcePos "" (P.unsafePos 1) (P.unsafePos 1))
+makeIdent s = Ident s (P.SourcePos "" (P.mkPos 1) (P.mkPos 1))

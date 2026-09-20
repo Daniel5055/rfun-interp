@@ -20,6 +20,7 @@ import Text.PrettyPrint
 import Data.List (intersperse)
 import Text.Megaparsec (sourceName, sourceLine, sourceColumn, Pos, unPos)
 import qualified Data.Map as M
+import Prelude hiding ((<>))
 -- import Text.Megaparsec.Pos (unPos)
 
 -- import Data.Complex

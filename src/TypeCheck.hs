@@ -11,6 +11,7 @@
 -- |Simple type check for RFun17
 --
 -----------------------------------------------------------------------------
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module TypeCheck (typecheck) where
 
@@ -20,7 +21,9 @@ import qualified Data.Map as M
 
 import Control.Monad.State
 import Control.Monad.Reader
-import Control.Monad.Except
+import Control.Monad.Except hiding (mapError)
+import Control.Monad (when, unless)
+import Prelude hiding (fail)
 
 -- import Data.List (intersperse)
 
@@ -36,6 +39,8 @@ typecheck p = catchTCError $ hts >> cfd >> ltc
  -- Check that value had correct type
 
 type TCError a = Either String a
+
+fail = Left
 
 noTypeError :: TCError ()
 noTypeError = return ()

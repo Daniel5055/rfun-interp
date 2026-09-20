@@ -1,4 +1,5 @@
 dist
+dist-newstyle
 cabal-dev
 *.o
 *.hi
@@ -11,6 +12,8 @@ cabal.sandbox.config
 cabal.config
 
 src/Main
+bin/
 
 docs/*
 site
+
