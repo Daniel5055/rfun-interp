@@ -49,7 +49,7 @@ data Clause   = Clause { clauseIdent :: Ident
 data TypeSig  = TypeSig [BType] BType BType
               deriving (Eq, Show)
 
-data BType    = IntT | QbitT | DataT Ident | ListT BType | ProdT [BType] | SumT [BType] | FunT TypeSig | VarT Ident | AnyT
+data BType    = IntT | QbitT | DataT Ident | ListT BType | ProdT [BType] | SumT [BType] | FunT TypeSig | VarT Ident | AnyT
               deriving (Eq, Show)
 
 -- |An expression is

@@ -1,0 +1,38 @@
+---------------------------------------------------------------
+---- ARITHMETIC
+---------------------------------------------------------------
+
+-- We can define the natural numbers as Peano numbers
+data Nat = Z | S Nat
+
+-- This will give the intuitive definition of addition
+plus :: Nat -> Nat <-> Nat
+plus Z     x = x
+plus (S y) x =
+  let x' = plus y x
+  in  (S x')
+
+---------------------------------------------------------------
+---- ACTORS
+---------------------------------------------------------------
+
+
+-- spawn :: (Actor a b c) -> b -> Action () Addr
+-- send :: Action (Addr, Int) (Addr, Int)
+-- `yield` and `: ()` are structure for defining an actor
+
+data MsgType = MsgIn Nat | MsgOut Nat
+
+f1 :: Int <-> ((), Int)
+f1 x = ((MsgIn x), (S Z))
+
+-- Spawns an actor and sends it a number
+$actorMain :: Actor () Int Int
+$actorMain : () = arr f1 >>> first (spawn $actor1 (S (S Z))) >>> send
+
+-- Receives a natural and increments its state
+$actor1 :: Actor MsgType Int Int
+$actor1 : (MsgIn x) = arr (plus x) >>> yield
+
+
+

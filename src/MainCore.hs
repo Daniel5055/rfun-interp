@@ -18,7 +18,7 @@
 --
 -----------------------------------------------------------------------------
 
-module Main (main) where
+module MainCore (main) where
 
 import Core.Ast
 import Core.Parser (parseFromFile, parseValue, parseString, ParseError)

@@ -12,7 +12,7 @@
 --
 -----------------------------------------------------------------------------
 
-module Main (main) where
+module MainRFun (main) where
 
 import Parser
 import Ast

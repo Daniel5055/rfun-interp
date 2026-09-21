@@ -12,7 +12,7 @@
 --
 -----------------------------------------------------------------------------
 
-module Parser (parseFromFile, parseFromString, parseFromValue, prettyParseError, ParserError) where
+module Parser where
 
 import Ast
 
