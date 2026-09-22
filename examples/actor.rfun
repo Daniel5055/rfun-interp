@@ -28,11 +28,11 @@ f1 x = ((MsgIn x), (S Z))
 
 -- Spawns an actor and sends it a number
 $actorMain :: Actor () Int Int
-$actorMain : () = arr f1 >>> first (spawn $actor1 (S (S Z))) >>> send
+$actorMain : () = arr f1 >>> first (spawn $actor1 (S (S Z))) >>> send >>> yield 
 
 -- Receives a natural and increments its state
 $actor1 :: Actor MsgType Int Int
-$actor1 : (MsgIn x) = arr (plus x) >>> yield
+$actor1 : (MsgIn x) = arr (plus x) >>> yield $actor1
 
 
 

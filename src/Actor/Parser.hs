@@ -76,7 +76,7 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <?>
         second = symbol "second" >> Second <$> pAction
         send = symbol "send" >> return Send
         spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier <*> pLexprA)
-        yield = symbol "yield" >> return Yield
+        yield = symbol "yield" >> (Yield <$> optional (try pIdentifier))
 
 
 

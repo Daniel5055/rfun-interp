@@ -14,7 +14,7 @@ data Action  = Arr LExpr
             | Second Action
             | Send
             | Spawn Ident LExpr
-            | Yield
+            | Yield (Maybe Ident)
     deriving (Eq, Show)
 
 data Actor     = Actor    {   actorName     :: Ident
