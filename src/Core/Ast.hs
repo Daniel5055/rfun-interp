@@ -41,7 +41,7 @@ module Core.Ast where
 import qualified Data.Map as M
 import Data.List (intercalate)
 
--- |A program is a sequence of functions
+-- |A program is a squence of functions
 type Program  = [Func]
 
 -- |A function is an identifier is some left-expression as parameter and
@@ -63,7 +63,7 @@ data LExpr    = Var Ident                         -- ^ Variable
               | Constr Ident [LExpr]              -- ^ Constructor term
               | DupEq LExpr                       -- ^ Duplication / equality test
               deriving (Show, Eq)
-
+  
 -- |Identifiers at simple Strings
 type Ident    = String
 

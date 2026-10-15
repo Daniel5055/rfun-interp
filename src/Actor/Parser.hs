@@ -2,7 +2,7 @@ module Actor.Parser where
 
 import Text.Megaparsec (Parsec, MonadParsec (lookAhead, eof), try, (<?>), parse, getSourcePos)
 import Data.Void (Void)
-import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Defs (ADef, FDef))
+import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef))
 import Ast
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
@@ -10,6 +10,7 @@ import Control.Applicative ( optional, Alternative (some, (<|>)) )
 import Parser
 import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL))
 import Control.Monad (guard)
+import Text.Megaparsec (many)
 
 -- Lazy way to avoid ambiguity between regular function defs
 pActorIdentifier :: Parser Ident
@@ -59,7 +60,7 @@ actorType :: Parser ActorType
 actorType = do
     -- Message type x In type x Out type
     symbol "Actor"
-    ActorT <$> btype <*> btype <*> btype
+    ActorT <$> btype <*> btype
 
 pAction :: Parser Action
 pAction = comp <?> "arrow composition"
@@ -75,8 +76,8 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <?>
         first = symbol "first" >> First <$> pAction
         second = symbol "second" >> Second <$> pAction
         send = symbol "send" >> return Send
-        spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier <*> pLexprA)
-        yield = symbol "yield" >> (Yield <$> optional (try pIdentifier))
+        spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier)
+        yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))
 
 
 

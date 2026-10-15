@@ -19,6 +19,7 @@
 -- * I know that there are an obvious reader monad below.
 -----------------------------------------------------------------------------
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Core.Interp where
 
@@ -27,6 +28,7 @@ import qualified Data.Map as M
 import Control.Monad
 import Control.Monad.Writer
 import Control.Monad.Except
+import Control.Applicative
 -- import Debug.Trace (trace)
 
 -------------------------------------------------------------------------------
@@ -42,7 +44,12 @@ type ErrorRFun = String
                -- | WrongEQ
 
 newtype Eval a = E { runE :: WriterT EvalTrace (Either ErrorRFun) a }
-    deriving (Applicative, Functor, Monad, MonadWriter EvalTrace, MonadError ErrorRFun)
+    deriving (Applicative, Functor, Monad, MonadWriter EvalTrace, MonadError ErrorRFun, Alternative)
+
+instance Alternative (Either ErrorRFun) where
+  (<|>) (Left msg) b = b
+  (<|>) a _ = a
+  empty = Left "Empty"
 
 runEval :: Eval a ->  Either ErrorRFun (a, EvalTrace)
 runEval eval = runWriterT (runE eval)

@@ -18,21 +18,31 @@ plus (S y) x =
 
 
 -- spawn :: (Actor a b c) -> b -> Action () Addr
--- send :: Action (Addr, Int) (Addr, Int)
+-- send :: Action (Addr, a) (Addr, a)
 -- `yield` and `: ()` are structure for defining an actor
 
 data MsgType = MsgIn Nat | MsgOut Nat
 
-f1 :: Int <-> ((), Int)
-f1 x = ((MsgIn x), (S Z))
+f1 :: Nat <-> (MsgType, Nat)
+f1 x = ((MsgIn x), (S (S Z)))
 
 -- Spawns an actor and sends it a number
-$actorMain :: Actor () Int Int
-$actorMain : () = arr f1 >>> first (spawn $actor1 (S (S Z))) >>> send >>> yield 
+$actorMain :: Actor () Nat
+$actorMain : () =
+  arr f1 >>> second (spawn $actor1) >>> send >>> yield 
 
 -- Receives a natural and increments its state
-$actor1 :: Actor MsgType Int Int
+$actor1 :: Actor MsgType Nat
 $actor1 : (MsgIn x) = arr (plus x) >>> yield $actor1
 
 
+-- f s msg -> do something
 
+
+-- yield 
+
+-- f,s,[msg] <-> g,s,[msg]
+
+-- Spawn either as the devil or hidden side effect
+
+-- Also drafting semantics, and if it looks good or not (trial and error)

@@ -1,19 +1,20 @@
 module Actor.Ast where
 
 import Ast (LExpr, Ident, BType, Func)
+import qualified Data.Map as M
 
-type ActorProgram = [Defs]
+type ActorProgram = [Def]
 
-data Defs   = ADef Actor
+data Def   = ADef Actor
             | FDef Func
     deriving (Eq, Show)
 
-data Action  = Arr LExpr
+data Action = Arr LExpr
             | Comp Action Action
             | First Action
             | Second Action
             | Send
-            | Spawn Ident LExpr
+            | Spawn Ident
             | Yield (Maybe Ident)
     deriving (Eq, Show)
 
@@ -27,6 +28,5 @@ data ActorClause  = ActorClause { aClauseIdent :: Ident
                                 , aClauseBody  :: Action }
               deriving (Eq, Show)
 
-data ActorType = ActorT BType BType BType
+data ActorType = ActorT BType BType
               deriving (Eq, Show)
-

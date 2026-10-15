@@ -12,7 +12,7 @@
 --
 -----------------------------------------------------------------------------
 
-module Interp (interp) where
+module Interp where
 
 import Ast
 import qualified Core.Ast as C

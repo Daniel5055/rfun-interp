@@ -24,20 +24,21 @@ import System.Environment
 import System.Exit
 import Actor.Ast (ActorProgram)
 import Actor.Parser (actorParseFromString)
+import Actor.Interp (interpActor)
 
 
 main :: IO ()
 main =
   do
     args <- getArgs
+    putStrLn $ show args
     case args of
-      --(filename : program : values) ->
-        --do p <- parseProgram filename
-           --vs <- parseValues values
-           --typecheckProgram p
-           --case interp p program vs of
-             --(Left err)  -> putStrLn "Run-time error:" >> (putStrLn $ err)
-             --(Right val) -> putStrLn $ ppValue val
+      (filename : program : values) ->
+        do p <- parseProgram filename
+           [v] <- parseValues values
+           case interpActor p program v of
+             (Left err)  -> putStrLn "Run-time error:" >> (putStrLn $ err)
+             (Right vs) -> putStrLn $ show (map ppValue vs)
       [filename] -> parseProgram filename >>= print
       _ -> putStrLn "Wrong number of arguments.\nUsage:\n  \"rfun\" programfile startfunc startvalue+\nor to stop before interpretation:\n  \"rfun\" programfile "
 
