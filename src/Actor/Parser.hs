@@ -1,6 +1,13 @@
 module Actor.Parser where
 
-import Text.Megaparsec (Parsec, MonadParsec (lookAhead, eof), try, (<?>), parse, getSourcePos)
+import Text.Megaparsec
+    ( Parsec,
+      MonadParsec(lookAhead, eof),
+      try,
+      (<?>),
+      parse,
+      getSourcePos,
+      many )
 import Data.Void (Void)
 import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef))
 import Ast
@@ -10,7 +17,8 @@ import Control.Applicative ( optional, Alternative (some, (<|>)) )
 import Parser
 import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL))
 import Control.Monad (guard)
-import Text.Megaparsec (many)
+import Debug.Trace
+import Text.Megaparsec.Debug
 
 -- Lazy way to avoid ambiguity between regular function defs
 pActorIdentifier :: Parser Ident
@@ -73,8 +81,8 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <?>
     where
         aParens = parens pAction
         arr = symbol "arr" >> Arr <$> pLexprA
-        first = symbol "first" >> First <$> pAction
-        second = symbol "second" >> Second <$> pAction
+        first = symbol "first" >> First <$> pAction'
+        second = symbol "second" >> Second <$> pAction'
         send = symbol "send" >> return Send
         spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier)
         yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))

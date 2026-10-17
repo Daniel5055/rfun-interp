@@ -1,0 +1,20 @@
+---------------------------------------------------------------
+---- ARITHMETIC
+---------------------------------------------------------------
+
+-- We can define the natural numbers as Peano numbers
+data Nat = Z | S Nat
+
+-- This will give the intuitive definition of addition
+plus :: Nat -> Nat <-> Nat
+plus Z     x = x
+plus (S y) x =
+  let x' = plus y x
+  in  (S x')
+
+f1 :: Nat -> Nat <-> Nat
+f1 x y = plus x y
+
+-- Spawns an actor and sends it a number
+$actorMain :: Actor () Nat
+$actorMain : () = arr (f1 (S Z)) >>> yield 

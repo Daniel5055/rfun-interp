@@ -1,13 +1,14 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 module Actor.Interp where
-import Ast (Value (TupleV, IntV, FunV), LExpr (App, Var), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE), Ident (identifier))
+import Ast (Value (TupleV, IntV, FunV, ConstrV), LExpr (App, Var, Tuple, Constr, List), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE), Ident (identifier), Program, LExprList (ListNil, ListEnd, ListCons))
 import Actor.Ast
 import Control.Monad (liftM, ap)
 import System.Posix.Internals (rtsIsThreaded_)
 import Data.Foldable (find)
 import qualified Data.Map as M
 import Core.Interp (evalRMatchV, evalRMatchS, Substitution, Eval, runEval, idSub, failEval)
+import qualified Core.Ast as C
 import Interp (tcValue, tcLExpr, interp)
 import Control.Applicative
 
@@ -19,6 +20,7 @@ type Result = M.Map Addr Value
 type DefEnv = M.Map String Def
 
 data ActorState = AS { aAddr :: Addr, aInbox :: [Msg], aState :: Value, aActor :: Actor }
+    deriving Show
 
 newtype Runtime a = Runtime { run :: DefEnv -> [ActorState] -> Addr -> Either String (a, [ActorState], Addr) }
 
@@ -50,6 +52,11 @@ runtimeError s = Runtime (\_ _ _ -> Left s)
 
 ----- Side effect functions
 
+isDone :: Runtime Bool
+isDone = Runtime rt
+    where
+        rt _ as n = Right (null as, as, n)
+
 yield :: ActorState -> Runtime ()
 yield as = Runtime rt
     where
@@ -77,14 +84,22 @@ receive :: Runtime (ActorState, ActorClause, Substitution)
 receive = Runtime rt
     where rt env as n = let (state, ac, s, as') = matchActor as in Right ((state, ac, s), as', n)
 
+getFuncEnv :: Runtime Program
+getFuncEnv = Runtime rt
+    where
+        rt env as n = Right (toProg env, as, n)
+        toProg = map (\(FDef f) -> f) . filter filterFunc . map snd . M.toList
+        filterFunc (ADef _) = False
+        filterFunc (FDef _) = True
+
 lookupFunc :: String -> Runtime Func
 lookupFunc s = Runtime rt
     where
-        rt env as addr = (,as,addr) <$> findFunc (s) env
+        rt env as addr = (,as,addr) <$> findFunc s env
         findFunc s env =
             case M.lookup s env of
                 Just def ->
-                    case def of 
+                    case def of
                         FDef f -> Right f
                         ADef _ -> Left $ "Identifier " ++ s ++ " refers to actor not function"
                 Nothing -> Left $ "Function " ++ s ++ "  does not exist"
@@ -96,11 +111,11 @@ lookupActor s = Runtime rt
         findActor s env =
             case M.lookup s env of
                 Just def ->
-                    case def of 
+                    case def of
                         ADef a -> Right a
                         FDef _ -> Left $ "Identifier " ++ s ++ " refers to actor not function"
                 Nothing -> Left $ "Function " ++ s ++ "  does not exist"
-            
+
 
 matchActor :: [ActorState] -> (ActorState, ActorClause, Substitution, [ActorState])
 matchActor (actorState@(AS addr inbox state actor):as) =
@@ -109,14 +124,17 @@ matchActor (actorState@(AS addr inbox state actor):as) =
         Left _ -> (nAs, nAc, nSub, actorState:nAss)
 
     where
-        res = runEval $ matchMessages (inbox) (actorClause actor)
+        res = runEval $ matchMessages inbox (actorClause actor)
         (nAs, nAc, nSub, nAss) = matchActor as
 matchActor [] = error "Program stalled, no matching messages for remaining actors"
 
 
 matchMessages :: [Msg] -> [ActorClause] -> Eval ([Msg], ActorClause, Substitution)
 matchMessages (m:ms) acs = ((\(ac, s) -> (ms, ac, s)) <$>  matchClauses m acs) <|> matchMessages ms acs
-matchMessages [] acs = failEval "No matching messages"
+matchMessages [] acs =
+    case find (\ac -> aClauseMsg ac == Tuple []) acs of
+        Just ac -> return ([], ac, idSub)
+        Nothing -> failEval "No matching messages"
 
 matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution)
 matchClauses msg (ac:acs) = do
@@ -126,46 +144,54 @@ matchClauses msg (ac:acs) = do
 
 matchClauses msg [] = failEval "No matching clauses"
 
-evalActor :: Result -> Runtime Result 
+evalActor :: Result -> Runtime Result
 evalActor res = do
+    done <- isDone
+    if done then return res else do
     (as, ac, sub) <- receive
-    (TupleV [FunV f, val]) <- evalAction (aClauseBody ac) (aState as)
+    (TupleV [FunV f, val]) <- evalAction (subAction sub (aClauseBody ac)) (aState as)
     if f == "" then evalActor $ M.insert (aAddr as) val res else do
         actor <- lookupActor f
         yield as{ aState = val, aActor = actor }
-        evalActor res 
+        evalActor res
 
 -- Evaluate runtime unitl it resolves to list of final actor states
-evalAction :: forall s.  Action -> Value -> Runtime Value 
-evalAction Send (TupleV [IntV addr, msg]) = 
+evalAction :: forall s.  Action -> Value -> Runtime Value
+evalAction Send (TupleV [IntV addr, msg]) =
     send addr msg >> return (TupleV [IntV addr, msg])
-evalAction Send _ = 
-    runtimeError "send expects two arguments, address and message"
+evalAction Send v =
+    runtimeError $ "send expects 2-tuple, not " ++ show v
 
 evalAction (Arr (App name inv args)) val = do
-    case interp [Func (makeIdent "f") Nothing [Clause (makeIdent "f") [Var (makeIdent "_x")] (Guard []) (LeftE (App name inv (args++[Var (makeIdent "_x")])))]] "f" ([val]) of
+    env <- getFuncEnv
+    case interp (env ++ [Func (makeIdent "_f") Nothing [Clause (makeIdent "_f") [Var (makeIdent "_x")] (Guard []) (LeftE (App name inv (args++[Var (makeIdent "_x")])))]]) "_f" [val] of
         Right v -> return v
         Left s -> runtimeError s
-    
+evalAction (Arr (Var name)) val = do
+    env <- getFuncEnv
+    case interp env (identifier name) [val] of
+        Right v -> return v
+        Left s -> runtimeError s
+
 evalAction (Comp a1 a2) val = evalAction a1 val >>= evalAction a2
 
 evalAction (First a) (TupleV [v1, v2]) = do
     v3 <- evalAction a v1
     return $ TupleV [v3, v2]
-evalAction (First a) _ =
-    runtimeError "Expected 2-tuple value to `first` arrow"
+evalAction (First a) v =
+    runtimeError $ "Expected 2-tuple value to `first` arrow, instead got " ++ show v
 
 evalAction (Second a) (TupleV [v1, v2]) = do
     v3 <- evalAction a v2
     return $ TupleV [v1, v3]
-evalAction (Second a) _ =
-    runtimeError "Expected 2-tuple value to `second` arrow"
+evalAction (Second a) v =
+    runtimeError $ "Expected 2-tuple value to `second` arrow, instead got " ++ show v
 
 evalAction (Spawn name) val = do
     a <- lookupActor (identifier name)
-    IntV <$> spawn a val 
+    IntV <$> spawn a val
 
-evalAction (Yield (Just name)) val = return $ (TupleV [FunV (identifier name), val])
+evalAction (Yield (Just name)) val = return $ TupleV [FunV (identifier name), val]
 evalAction (Yield Nothing) val = return $ TupleV [FunV "", val]
 
 -- Accepts a program, function or actor to run, and arguments
@@ -174,30 +200,52 @@ evalAction (Yield Nothing) val = return $ TupleV [FunV "", val]
 interpActor :: ActorProgram -> String -> Value -> Either String [Value]
 interpActor p i val = do
     (res, as', _) <- run (evalActor M.empty) env as addr
-    if not $ null as then Left "Actors left hanging" else
+    if not $ null as' then Left "Actors left hanging" else
         return $ M.elems res
     where
         env = makeDefEnv p
         addr = 1
         as = [AS 0 [] val (findActor i env)]
-        
+
         findActor s env =
             case M.lookup s env of
                 Just def ->
-                    case def of 
+                    case def of
                         ADef a -> a
                         FDef _ -> error $ "Identifier " ++ s ++ " refers to actor not function"
                 Nothing -> error $ "Function " ++ s ++ "  does not exist"
 
 makeDefEnv :: ActorProgram -> DefEnv
-makeDefEnv prog = M.fromList $ map (\def -> defName def) prog
+makeDefEnv prog = M.fromList $ map defName prog
     where
         defName :: Def -> (String, Def)
         defName def = case def of
             ADef a -> (identifier $ actorName a, def)
             FDef (Func f _ _) -> (identifier $ f, def)
             FDef _ -> ("", def)
-    
+
+subAction :: Substitution -> Action -> Action
+subAction s (Arr exp) = Arr $ subLExpr s exp
+subAction s (Comp a1 a2) = Comp (subAction s a1) (subAction s a2)
+subAction s (First a) = First $ subAction s a
+subAction s (Second a) = Second $ subAction s a
+subAction s a = a
+
+subLExpr :: Substitution -> LExpr -> LExpr
+subLExpr s (Var name) =
+    maybe (Var name) toConst (M.lookup (identifier name) s)
+    where
+        toConst :: C.Value -> LExpr
+        toConst (C.ConstrV id vals) = Constr (makeIdent id) (map toConst vals)
+subLExpr s (Constr name exps) = Constr name (map (subLExpr s) exps)
+subLExpr s (Tuple exps) = Tuple (map (subLExpr s) exps)
+subLExpr s (List (ListCons exp ls)) = List (ListCons (subLExpr s exp) ls')
+    where (List ls') = subLExpr s (List ls)
+subLExpr s (List (ListEnd exp)) = List (ListEnd (subLExpr s exp))
+subLExpr s (List ListNil) = List ListNil
+subLExpr s (App name inv exps) = App name inv (map (subLExpr s) exps)
+
+
 
 -- Actually probably better to implement this as a monad
 -- Due to all the side effects which can modify actor queue

@@ -23,17 +23,17 @@ plus (S y) x =
 
 data MsgType = MsgIn Nat | MsgOut Nat
 
-f1 :: Nat <-> (MsgType, Nat)
-f1 x = ((MsgIn x), (S (S Z)))
+f1 :: Nat <-> (Nat, MsgType)
+f1 x = ((S (S Z)), (MsgIn x))
 
 -- Spawns an actor and sends it a number
 $actorMain :: Actor () Nat
 $actorMain : () =
-  arr f1 >>> second (spawn $actor1) >>> send >>> yield 
+  arr f1 >>> first (spawn $actor1) >>> send >>> yield 
 
 -- Receives a natural and increments its state
 $actor1 :: Actor MsgType Nat
-$actor1 : (MsgIn x) = arr (plus x) >>> yield $actor1
+$actor1 : (MsgIn x) = arr (plus x) >>> yield
 
 
 -- f s msg -> do something
