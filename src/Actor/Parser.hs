@@ -9,7 +9,7 @@ import Text.Megaparsec
       getSourcePos,
       many )
 import Data.Void (Void)
-import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef))
+import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), ApplyAction (ApplyA))
 import Ast
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
@@ -77,7 +77,7 @@ pAction = comp <?> "arrow composition"
         table = [ [ InfixL (symbol ">>>" >> return Comp) ]]
 
 pAction' :: Parser Action
-pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <?> "action"
+pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|> doNot <?> "action"
     where
         aParens = parens pAction
         arr = symbol "arr" >> Arr <$> pLexprA
@@ -86,7 +86,34 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <?>
         send = symbol "send" >> return Send
         spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier)
         yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))
+        doNot = do
+            il <- L.indentLevel
+            symbol "proc"
+            id <- pIdentifier
+            symbol "->"
+            symbol "do"
+            scn
+            --L.indentGuard scn GT il
+            il_l <- L.indentLevel
+            c <- some $ try (L.lineFold scn pDoAction)
+            --forM_ c (\(_,_,_,i) -> when (il_l /= i) (L.incorrectIndent EQ il_l i))
+            return $ Do id c
 
+-- Parse do notation
+pApplyAction :: Parser ApplyAction
+pApplyAction = do
+    a <- pAction
+    symbol "-<"
+    ApplyA a <$> pLexprA
+
+pDoAction :: Parser a -> Parser DoAction
+pDoAction sc = try bind <|> seq <?> "Do Action"
+    where
+        seq = DoSeq <$> pApplyAction
+        bind = do
+            exp <- pLexprA
+            symbol "<-"
+            DoBind exp <$> pApplyAction
 
 
 pActorProgram :: Parser ActorProgram

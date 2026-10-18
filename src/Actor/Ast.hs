@@ -16,6 +16,15 @@ data Action = Arr LExpr
             | Send
             | Spawn Ident
             | Yield (Maybe Ident)
+            | Do Ident [DoAction]
+    deriving (Eq, Show)
+
+-- Do notation
+data ApplyAction = ApplyA Action LExpr
+    deriving (Eq, Show)
+
+data DoAction = DoSeq ApplyAction
+              | DoBind LExpr ApplyAction
     deriving (Eq, Show)
 
 data Actor     = Actor    {   actorName     :: Ident

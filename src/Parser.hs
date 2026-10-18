@@ -70,7 +70,7 @@ symbol :: String -> Parser ()
 symbol s = L.symbol' sc s >> return ()
 
 reservedWords :: [String]
-reservedWords = ["let", "in", "case", "of", "data"]
+reservedWords = ["let", "in", "case", "of", "data", "do", "proc"]
 
 reserved :: String -> Parser ()
 reserved s = lexeme $ (string s >> return ())
