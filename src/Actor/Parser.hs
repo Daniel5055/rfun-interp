@@ -89,9 +89,9 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
         doNot = do
             il <- L.indentLevel
             symbol "proc"
-            id <- pIdentifier
+            exp <- pLexpr
             symbol "->"
-            Proc id <$> pCmdAction
+            Proc exp <$> pCmdAction
 
 -- Parse do notation
 pCmdAction :: Parser CmdAction

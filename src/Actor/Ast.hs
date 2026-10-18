@@ -1,6 +1,6 @@
 module Actor.Ast where
 
-import Ast (LExpr, Ident, BType, Func)
+import Ast (LExpr, Ident, BType, Func, Expr)
 import qualified Data.Map as M
 
 type ActorProgram = [Def]
@@ -10,13 +10,14 @@ data Def   = ADef Actor
     deriving (Eq, Show)
 
 data Action = Arr LExpr
+            | ArrLambda LExpr Expr
             | Comp Action Action
             | First Action
             | Second Action
             | Send
             | Spawn Ident
             | Yield (Maybe Ident)
-            | Proc Ident CmdAction
+            | Proc LExpr CmdAction
     deriving (Eq, Show)
 
 -- Do notation
