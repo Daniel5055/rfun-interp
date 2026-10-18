@@ -9,7 +9,7 @@ import Text.Megaparsec
       getSourcePos,
       many )
 import Data.Void (Void)
-import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), ApplyAction (ApplyA))
+import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd))
 import Ast
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
@@ -91,29 +91,35 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
             symbol "proc"
             id <- pIdentifier
             symbol "->"
+            Proc id <$> pCmdAction
+
+-- Parse do notation
+pCmdAction :: Parser CmdAction
+pCmdAction = try pDo <|> pApply <?> "Cmd action"
+    where
+        -- KCmd only used internally
+        pApply = do
+            a <- pAction
+            symbol "-<"
+            ApplyCmd a <$> pLexprA
+        pDo = do
+            il <- L.indentLevel
             symbol "do"
             scn
             --L.indentGuard scn GT il
             il_l <- L.indentLevel
             c <- some $ try (L.lineFold scn pDoAction)
             --forM_ c (\(_,_,_,i) -> when (il_l /= i) (L.incorrectIndent EQ il_l i))
-            return $ Do id c
-
--- Parse do notation
-pApplyAction :: Parser ApplyAction
-pApplyAction = do
-    a <- pAction
-    symbol "-<"
-    ApplyA a <$> pLexprA
+            return $ DoCmd c
 
 pDoAction :: Parser a -> Parser DoAction
 pDoAction sc = try bind <|> seq <?> "Do Action"
     where
-        seq = DoSeq <$> pApplyAction
+        seq = DoSeq <$> pCmdAction
         bind = do
             exp <- pLexprA
             symbol "<-"
-            DoBind exp <$> pApplyAction
+            DoBind exp <$> pCmdAction
 
 
 pActorProgram :: Parser ActorProgram
