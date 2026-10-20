@@ -24,7 +24,7 @@ common deps
                       megaparsec >= 9.8.2,
                       parsec == 3.1.18.0,
                       parser-combinators >= 1.3.1,
-                      containers == 0.8.1,
+                      containers == 0.6.7,
                       pretty == 1.1.3.6,
                       mtl == 2.3.2
   hs-source-dirs: src
@@ -33,20 +33,21 @@ executable actor
   import: deps
   other-modules:      Actor.Ast,
                       Actor.Parser,
-                      Actor.Interp
+                      Actor.Interp,
+                      Actor.Process
 
   ghc-options:      -main-is MainActor
   main-is: MainActor.hs
 
-executable rfun
-  import: deps
-  ghc-options:      -main-is MainRFun
-  main-is: MainRFun.hs
+--executable rfun
+  --import: deps
+  --ghc-options:      -main-is MainRFun
+  --main-is: MainRFun.hs
 
-executable core
-  import: deps
-  other-modules:      Core.Parser,
-                      Core.RFun2Prog
+--executable core
+  --import: deps
+  --other-modules:      Core.Parser,
+                      --Core.RFun2Prog
 
-  ghc-options:      -main-is MainCore
-  main-is: MainCore.hs
+  --ghc-options:      -main-is MainCore
+  --main-is: MainCore.hs

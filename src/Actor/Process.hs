@@ -1,20 +1,16 @@
 module Actor.Process where
 import Actor.Ast
 import Ast
-import Actor.Interp (Runtime)
+import qualified Data.Map as M
+import Debug.Trace
 
 splitA :: Action
-splitA = ArrLambda (Var id1) (LetIn (Var id2) (App eqFunc True [Constr eqConstr []]) (LeftE (Tuple [Var id1, Var id2])))
+splitA = ArrLambda (Var id1) (LetIn (Var id2) (App eqFunc False [Var id1, Constr eqConstr []]) (LeftE (Tuple [Var id1, Var id2])))
   where
     id1 = makeIdent "_x"
     id2 = makeIdent "_y"
     eqFunc = makeIdent "eq"
     eqConstr = makeIdent "Eq"
-
-idA :: Action
-idA = ArrLambda (Var x) (LeftE (Var x))
-  where
-    x = makeIdent "_x"
 
 -- Not really possible, as we are discarding data in a reversible system
 fstA :: Action
@@ -24,7 +20,7 @@ fstA = ArrLambda (Tuple [Var id1, Var id2]) (LeftE (Var id1))
     id2 = makeIdent "_y"
 
 bindA :: Action -> Action -> Action
-bindA u = Comp (Comp (Comp splitA (First idA)) (Second u))
+bindA u = Comp (Comp splitA (Second u))
 
 -- Should not really be possible in a reversible system to discard result
 bind_A :: Action -> Action -> Action
@@ -44,17 +40,25 @@ ppAction (First a) = First (ppAction a)
 ppAction (Second a) = Second (ppAction a)
 ppAction a = a
 
--- Lift lambdas
---liftLambda :: Runtime Action -> Runtime Action
---liftLambda rt = do
-    --a <- rt
-    --case a of
-      --ArrLambda p exp -> undefined
-  --where
-    --rt' env as addr = Right (Arr (Var "_"), as, addr)
-    --res = run 
+-- Lift anomymous lambda functions from actions and add as named functions to env
+liftLambda :: Integer -> Action -> (Action, DefEnv, Integer)
+liftLambda id (ArrLambda arg exp) = (Arr (Var lName), M.singleton (identifier lName) (FDef lFunc), id+1)
+  where
+    lName = makeIdent ("__" ++ show id)
+    lFunc =
+      Func
+        lName
+        Nothing
+        [Clause lName [arg] (Guard []) exp]
 
---liftLambda (Comp a1 a2) = Comp <$> liftLambda a1 <*> liftLambda a2
---liftLambda (First a) = First <$> liftLambda a
---liftLambda (Second a) = First <$> liftLambda a
---liftLambda a = return a
+liftLambda id0 (Comp a1 a2) = (Comp a1' a2', env1 `M.union` env2, id2)
+  where
+    (a1', env1, id1) = liftLambda id0 a1
+    (a2', env2, id2) = liftLambda id1 a2
+liftLambda id (First a) = (First a', env, id')
+  where
+    (a', env, id') = liftLambda id a
+liftLambda id (Second a) = (Second a', env, id')
+  where
+    (a', env, id') = liftLambda id a
+liftLambda id a = (a, M.empty, id)

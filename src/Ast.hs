@@ -78,7 +78,13 @@ data LExprList = ListCons LExpr LExprList
 -- |Identifiers at simple Strings
 data Ident    = Ident { identifier :: String
                       , sourcePos  :: P.SourcePos }
-              deriving (Eq, Show)
+              deriving (Eq)
+
+instance Show Ident where
+        show = identifier
+
+
+
 
 -- |A value (p. 16) is defined as
 -- * a constructor of 0 or more values

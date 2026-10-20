@@ -42,3 +42,5 @@ data ActorClause  = ActorClause { aClauseIdent :: Ident
 
 data ActorType = ActorT BType BType
               deriving (Eq, Show)
+
+type DefEnv = M.Map String Def

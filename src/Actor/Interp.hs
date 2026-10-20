@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 module Actor.Interp where
-import Ast (Value (TupleV, IntV, FunV, ConstrV), LExpr (App, Var, Tuple, Constr, List), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE), Ident (identifier), Program, LExprList (ListNil, ListEnd, ListCons))
+import Ast (Value (TupleV, IntV, FunV, ConstrV), LExpr (App, Var, Tuple, Constr, List), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE, LetIn), Ident (identifier), Program, LExprList (ListNil, ListEnd, ListCons))
 import Actor.Ast
 import Control.Monad (liftM, ap)
 import System.Posix.Internals (rtsIsThreaded_)
@@ -11,13 +11,14 @@ import Core.Interp (evalRMatchV, evalRMatchS, Substitution, Eval, runEval, idSub
 import qualified Core.Ast as C
 import Interp (tcValue, tcLExpr, interp)
 import Control.Applicative
+import Actor.Process
+import Data.List (union)
+
 
 type Addr = Integer
 type Msg = Value
 
 type Result = M.Map Addr Value
-
-type DefEnv = M.Map String Def
 
 data ActorState = AS { aAddr :: Addr, aInbox :: [Msg], aState :: Value, aActor :: Actor }
     deriving Show
@@ -51,6 +52,10 @@ runtimeError s = Runtime (\_ _ _ -> Left s)
 
 
 ----- Side effect functions
+
+expandEnv :: DefEnv -> Runtime a -> Runtime a
+expandEnv env rt = Runtime rt'
+    where rt' env' = run rt (env' `M.union` env)
 
 isDone :: Runtime Bool
 isDone = Runtime rt
@@ -107,7 +112,7 @@ lookupFunc s = Runtime rt
 lookupActor :: String -> Runtime Actor
 lookupActor s = Runtime rt
     where
-        rt env as addr = (,as,addr) <$> findActor (s) env
+        rt env as addr = (,as,addr) <$> findActor s env
         findActor s env =
             case M.lookup s env of
                 Just def ->
@@ -149,14 +154,15 @@ evalActor res = do
     done <- isDone
     if done then return res else do
     (as, ac, sub) <- receive
-    (TupleV [FunV f, val]) <- evalAction (subAction sub (aClauseBody ac)) (aState as)
+    let (action, env, _) = liftLambda 0 $ (ppAction . subAction sub) (aClauseBody ac)
+    (TupleV [FunV f, val]) <- expandEnv env (evalAction action (aState as))
     if f == "" then evalActor $ M.insert (aAddr as) val res else do
         actor <- lookupActor f
         yield as{ aState = val, aActor = actor }
         evalActor res
 
 -- Evaluate runtime unitl it resolves to list of final actor states
-evalAction :: forall s.  Action -> Value -> Runtime Value
+evalAction :: Action -> Value -> Runtime Value
 evalAction Send (TupleV [IntV addr, msg]) =
     send addr msg >> return (TupleV [IntV addr, msg])
 evalAction Send v =
@@ -221,15 +227,31 @@ makeDefEnv prog = M.fromList $ map defName prog
         defName :: Def -> (String, Def)
         defName def = case def of
             ADef a -> (identifier $ actorName a, def)
-            FDef (Func f _ _) -> (identifier $ f, def)
+            FDef (Func f _ _) -> (identifier f, def)
             FDef _ -> ("", def)
 
 subAction :: Substitution -> Action -> Action
 subAction s (Arr exp) = Arr $ subLExpr s exp
+-- If any variable in arg reference in sub, then ignore
+subAction s (ArrLambda arg exp) = ArrLambda arg (subExpr s' exp)
+    where
+        -- Delete all bound variables from substition 
+        names = lExpNames arg
+        s' = foldr M.delete s names
 subAction s (Comp a1 a2) = Comp (subAction s a1) (subAction s a2)
 subAction s (First a) = First $ subAction s a
 subAction s (Second a) = Second $ subAction s a
+subAction s (Proc id cmd) = Proc id (subCmd s cmd)
 subAction s a = a
+
+subCmd :: Substitution -> CmdAction -> CmdAction
+subCmd s (ApplyCmd a exp) = ApplyCmd (subAction s a) (subLExpr s exp)
+subCmd s (KCmd exp cmd) = KCmd (subLExpr s exp) (subCmd s cmd)
+subCmd s (DoCmd ds) = DoCmd (map (subDo s) ds)
+
+subDo :: Substitution -> DoAction -> DoAction
+subDo s (DoSeq cmd) = DoSeq $ subCmd s cmd
+subDo s (DoBind exp cmd) = DoBind (subLExpr s exp) (subCmd s cmd)
 
 subLExpr :: Substitution -> LExpr -> LExpr
 subLExpr s (Var name) =
@@ -245,6 +267,26 @@ subLExpr s (List (ListEnd exp)) = List (ListEnd (subLExpr s exp))
 subLExpr s (List ListNil) = List ListNil
 subLExpr s (App name inv exps) = App name inv (map (subLExpr s) exps)
 
+subExpr :: Substitution -> Expr -> Expr
+subExpr s (LeftE exp) = LeftE $ subLExpr s exp
+subExpr s (LetIn arg exp1 exp2) = LetIn arg (subLExpr s exp1) (subExpr s' exp2)
+    where
+        -- Delete all bound variables from substition 
+        names = lExpNames arg
+        s' = foldr M.delete s names
+subExpr s (CaseOf exp cs) = CaseOf (subLExpr s exp) cs
+    where
+        f (arg, g, exp') = (arg, g, subExpr (s' arg) exp')
+        s' arg = foldr M.delete s (names arg)
+        names = lExpNames
+
+
+lExpNames :: LExpr -> [String]
+lExpNames (Var name) = [identifier name]
+lExpNames (Tuple exps) = foldl union [] (map lExpNames exps)
+lExpNames (List (ListCons exp ls)) = lExpNames exp `union` lExpNames (List ls)
+lExpNames (List (ListEnd exp)) = lExpNames exp
+lExpNames _ = []
 
 
 -- Actually probably better to implement this as a monad
