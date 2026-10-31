@@ -200,6 +200,15 @@ evalAction (Spawn name) val = do
 evalAction (Yield (Just name)) val = return $ TupleV [FunV (identifier name), val]
 evalAction (Yield Nothing) val = return $ TupleV [FunV "", val]
 
+-- Arrow choice behaviour defined by this
+evalAction (ABoth a1 a2) (ConstrV "_left" [x]) = do
+    val <- evalAction a1 x
+    return (ConstrV "_left" [val])
+evalAction (ABoth a1 a2) (ConstrV "_right" [x]) = do
+    val <- evalAction a2 x
+    return (ConstrV "_right" [val])
+evalAction (ABoth a1 a2) v = runtimeError $ "Expected either value, not " ++ show v
+
 -- Accepts a program, function or actor to run, and arguments
 -- Returns either an error, the return value of a function,
 --  or the final states of the spawned actors

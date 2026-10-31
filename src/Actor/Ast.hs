@@ -17,7 +17,15 @@ data Action = Arr LExpr
             | Send
             | Spawn Ident
             | Yield (Maybe Ident)
+
+            -- Proc notation
             | Proc LExpr CmdAction
+
+            -- Arrow Choice
+            | ALeft Action
+            | ARight Action
+            | ABoth Action Action
+            | AEither Action Action
     deriving (Eq, Show)
 
 -- Do notation

@@ -15,7 +15,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
 import Control.Applicative ( optional, Alternative (some, (<|>)) )
 import Parser
-import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL))
+import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL, InfixN))
 import Control.Monad (guard)
 import Debug.Trace
 import Text.Megaparsec.Debug
@@ -74,7 +74,11 @@ pAction :: Parser Action
 pAction = comp <?> "arrow composition"
     where
         comp = makeExprParser pAction' table
-        table = [ [ InfixL (symbol ">>>" >> return Comp) ]]
+        table = [
+                [ InfixN (symbol "+++" >> return ABoth),
+                  InfixN (symbol "|||" >> return AEither) ],
+                [ InfixL (symbol ">>>" >> return Comp) ]
+             ]
 
 pAction' :: Parser Action
 pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|> doNot <?> "action"
@@ -86,6 +90,8 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
         send = symbol "send" >> return Send
         spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier)
         yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))
+        left = symbol "left" >> ALeft <$> pAction'
+        right = symbol "right" >> ARight <$> pAction'
         doNot = do
             il <- L.indentLevel
             symbol "proc"
