@@ -36,6 +36,38 @@ untagA = ArrLambda id1 (CaseOf id1 [
     _left = makeIdent "_left"
     _right = makeIdent "_right"
 
+-- Translate cases into binary `Right (Right... (Left val) ...)`
+caseA :: LExpr -> LExpr -> [(LExpr, CmdAction)] -> Action
+caseA p e cs =
+  Comp 
+    (ArrLambda id1 (CaseOf e (
+        zipWith (curry (\((exp, _), c) -> (exp, Guard [], LeftE c))) cs cases
+    )))
+   cond
+  where
+    id1 = Var $ makeIdent "_x"
+    _left = makeIdent "_left"
+    _right = makeIdent "_right"
+    lf e = Constr _left [e]
+    rf e = Constr _right [e]
+
+    vars = map ((Tuple . map Var) . (\(e, _) -> boundVars e)) cs
+    binaries = take (length cs) $ iterate (rf.) lf
+    cases = zipWith ($) binaries vars
+    -- right most case (idA) is filler and should not be reached ever
+    cond = foldr (\(_, cmd) a -> AEither (ppAction (Proc p cmd)) a ) idA cs
+
+boundVars :: LExpr -> [Ident]
+boundVars (Constr _ exps) = concatMap boundVars exps
+boundVars (Var id) = [id]
+boundVars (Tuple exps) = concatMap boundVars exps
+boundVars (List (ListCons exp list)) = boundVars exp ++ boundVars (List list)
+boundVars (List (ListEnd exp)) = boundVars exp
+boundVars (List ListNil) = []
+-- Ignored for Application (not a 'pattern')
+boundVars _ = []
+
+
 
 bindA :: Action -> Action -> Action
 bindA u = Comp (Comp splitA (Second u))
@@ -54,6 +86,8 @@ ppAction (Proc p (DoCmd [DoSeq c])) = ppAction (Proc p c)
 ppAction (Proc p (DoCmd ((DoBind e c):ds))) = ppAction (Proc p c) `bindA` ppAction (Proc p (KCmd e (DoCmd ds)))
 -- Don't see the point of this one in a reversible system
 ppAction (Proc p (DoCmd ((DoSeq c):ds))) = ppAction (Proc p c) `bind_A` ppAction (Proc p (DoCmd ds))
+
+ppAction (Proc p (CaseOfCmd e cs)) = caseA p e cs
 
 -- Translate Arrow choice into pure arrow notation, ABoth is given
 ppAction (ABoth a1 a2) = ABoth a1 a2

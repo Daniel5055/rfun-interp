@@ -32,6 +32,7 @@ data Action = Arr LExpr
 data CmdAction = ApplyCmd Action LExpr
                | KCmd LExpr CmdAction
                | DoCmd [DoAction]
+               | CaseOfCmd LExpr [(LExpr, CmdAction)]
     deriving (Eq, Show)
 
 data DoAction = DoSeq CmdAction

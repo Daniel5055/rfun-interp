@@ -9,7 +9,7 @@ import Text.Megaparsec
       getSourcePos,
       many )
 import Data.Void (Void)
-import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd))
+import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd, CaseOfCmd))
 import Ast
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
@@ -101,7 +101,7 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
 
 -- Parse do notation
 pCmdAction :: Parser CmdAction
-pCmdAction = try pDo <|> pApply <?> "Cmd action"
+pCmdAction = try pDo <|> try pCaseOf <|> pApply <?> "Cmd action"
     where
         -- KCmd only used internally
         pApply = do
@@ -113,10 +113,28 @@ pCmdAction = try pDo <|> pApply <?> "Cmd action"
             symbol "do"
             scn
             --L.indentGuard scn GT il
-            il_l <- L.indentLevel
             c <- some $ try (L.lineFold scn pDoAction)
             --forM_ c (\(_,_,_,i) -> when (il_l /= i) (L.incorrectIndent EQ il_l i))
             return $ DoCmd c
+        pCaseOf = do
+            il <- L.indentLevel
+            reserved "case"
+            le <- pLexprA
+            reserved "of"
+            scn
+            c <- some $ try (L.lineFold scn pCase)
+            return $ CaseOfCmd le c
+        pCase sc' = do
+            scn
+            il <- L.indentLevel
+            le <- pLexpr
+            symbol "->"
+            sc'
+            cmd <- pCmdAction
+            return (le, cmd)
+
+
+
 
 pDoAction :: Parser a -> Parser DoAction
 pDoAction sc = try bind <|> seq <?> "Do Action"
