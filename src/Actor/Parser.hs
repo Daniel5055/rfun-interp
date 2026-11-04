@@ -17,8 +17,6 @@ import Control.Applicative ( optional, Alternative (some, (<|>)) )
 import Parser
 import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL, InfixN))
 import Control.Monad (guard)
-import Debug.Trace
-import Text.Megaparsec.Debug
 
 -- Lazy way to avoid ambiguity between regular function defs
 pActorIdentifier :: Parser Ident

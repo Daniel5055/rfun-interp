@@ -209,6 +209,14 @@ evalAction (ABoth a1 a2) (ConstrV "_right" [x]) = do
     return (ConstrV "_right" [val])
 evalAction (ABoth a1 a2) v = runtimeError $ "Expected either value, not " ++ show v
 
+-- Arrow either must also be handled due to irreversibility of untag
+evalAction (AEither a1 a2) c = do
+    val <- evalAction (ABoth a1 a2) c
+    case val of
+        ConstrV "_left" [v] -> return v
+        ConstrV "_right" [v] -> return v
+evalAction a v = runtimeError $ "Missing eval action clause for " ++ show a
+
 -- Accepts a program, function or actor to run, and arguments
 -- Returns either an error, the return value of a function,
 --  or the final states of the spawned actors
@@ -250,13 +258,23 @@ subAction s (ArrLambda arg exp) = ArrLambda arg (subExpr s' exp)
 subAction s (Comp a1 a2) = Comp (subAction s a1) (subAction s a2)
 subAction s (First a) = First $ subAction s a
 subAction s (Second a) = Second $ subAction s a
-subAction s (Proc id cmd) = Proc id (subCmd s cmd)
+subAction s (Proc id cmd) = Proc id (subCmd s' cmd)
+    where
+        s' = foldr M.delete s names
+        names = lExpNames id
+subAction s (ALeft a) = ALeft $ subAction s a
+subAction s (ARight a) = ALeft $ subAction s a
+subAction s (ABoth a1 a2) = ABoth (subAction s a1) (subAction s a2)
+subAction s (AEither a1 a2) = AEither (subAction s a1) (subAction s a2)
 subAction s a = a
 
 subCmd :: Substitution -> CmdAction -> CmdAction
 subCmd s (ApplyCmd a exp) = ApplyCmd (subAction s a) (subLExpr s exp)
 subCmd s (KCmd exp cmd) = KCmd (subLExpr s exp) (subCmd s cmd)
 subCmd s (DoCmd ds) = DoCmd (map (subDo s) ds)
+subCmd s (CaseOfCmd exp cs) = CaseOfCmd (subLExpr s exp) (map (\(e, c) -> (e, subCmd (s' e) c)) cs)
+    where
+        s' = foldr M.delete s . lExpNames
 
 subDo :: Substitution -> DoAction -> DoAction
 subDo s (DoSeq cmd) = DoSeq $ subCmd s cmd
@@ -275,6 +293,7 @@ subLExpr s (List (ListCons exp ls)) = List (ListCons (subLExpr s exp) ls')
 subLExpr s (List (ListEnd exp)) = List (ListEnd (subLExpr s exp))
 subLExpr s (List ListNil) = List ListNil
 subLExpr s (App name inv exps) = App name inv (map (subLExpr s) exps)
+subLExpr s c = c
 
 subExpr :: Substitution -> Expr -> Expr
 subExpr s (LeftE exp) = LeftE $ subLExpr s exp
