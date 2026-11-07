@@ -7,7 +7,7 @@ import Text.Megaparsec
       (<?>),
       parse,
       getSourcePos,
-      many )
+      many, sepBy, sepBy1 )
 import Data.Void (Void)
 import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd, CaseOfCmd))
 import Ast
@@ -17,6 +17,7 @@ import Control.Applicative ( optional, Alternative (some, (<|>)) )
 import Parser
 import Control.Monad.Combinators.Expr (makeExprParser, Operator (InfixL, InfixN))
 import Control.Monad (guard)
+import Data.Maybe
 
 -- Lazy way to avoid ambiguity between regular function defs
 pActorIdentifier :: Parser Ident
@@ -82,11 +83,17 @@ pAction' :: Parser Action
 pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|> doNot <?> "action"
     where
         aParens = parens pAction
-        arr = symbol "arr" >> Arr <$> pLexprA
+        arr = symbol "arr" >> Arr <$> pApp
         first = symbol "first" >> First <$> pAction'
         second = symbol "second" >> Second <$> pAction'
-        send = symbol "send" >> return Send
-        spawn = symbol "spawn" >> (Spawn <$> pActorIdentifier)
+        send = do
+            symbol "send"
+            inv <- optional $ symbol "!"
+            Send (isNothing inv) <$> (try pPat <|> return hole)
+        spawn = do
+            symbol "spawn"
+            inv <- optional $ symbol "!"
+            Spawn (isNothing inv) <$> pActorIdentifier
         yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))
         left = symbol "left" >> ALeft <$> pAction'
         right = symbol "right" >> ARight <$> pAction'
@@ -96,6 +103,39 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
             exp <- pLexpr
             symbol "->"
             Proc exp <$> pCmdAction
+
+        hole = Var $ makeIdent "_"
+
+pApp :: Parser LExpr
+pApp = try (parens app) <|> var <?> "application-only lExpr"
+    where
+        app    = do fun <- pIdentifier
+                    inv <- optional $ symbol "!"
+                    les <- some pLexpr
+                    return $ App fun (isNothing inv) les
+        var    = do fun <- pIdentifier
+                    inv <- optional $ symbol "!"
+                    return $ App fun (isNothing inv) []
+
+pPat :: Parser LExpr
+pPat = constr <|> vari <|> int <|> listf <|> try (parens constrp) <|> try tuple <|> try listc <|> parLE <?> "pattern"
+  where
+    int    = do Int <$> integer
+    vari   = do var <- try pIdentifier <|> hole
+                return $ Var var
+    constr = do c <- pConstructor
+                return $ Constr c []
+    constrp= do c <- pConstructor
+                vars <- many pPat
+                return $ Constr c vars
+    tuple  = do les <- parens $ pLexpr `sepBy` symbol ","
+                return $ Tuple les
+    listc  = do les <- parens $ pLexpr `sepBy1` symbol ":"
+                return $ List $ foldr ListCons (ListEnd $ last les) (init les)
+    listf  = do les <- brackets $ pLexpr `sepBy` symbol ","
+                return $ List $ foldr ListCons ListNil les
+    parLE  = parens pPat
+    hole = symbol "_" >> return (makeIdent "_")
 
 -- Parse do notation
 pCmdAction :: Parser CmdAction

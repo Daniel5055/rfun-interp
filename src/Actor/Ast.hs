@@ -14,8 +14,8 @@ data Action = Arr LExpr
             | Comp Action Action
             | First Action
             | Second Action
-            | Send
-            | Spawn Ident
+            | Send Bool LExpr
+            | Spawn Bool Ident
             | Yield (Maybe Ident)
 
             -- Proc notation

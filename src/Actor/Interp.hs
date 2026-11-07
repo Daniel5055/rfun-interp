@@ -16,7 +16,8 @@ import Data.List (union)
 
 
 type Addr = Integer
-type Msg = Value
+data Msg = Msg { msgInv :: Bool, msgValue :: Value }
+    deriving Show
 
 type Result = M.Map Addr Value
 
@@ -144,7 +145,7 @@ matchMessages [] acs =
 matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution)
 matchClauses msg (ac:acs) = do
         let pat = tcLExpr $ aClauseMsg ac
-        let val = tcValue msg
+        let val = tcValue (msgValue msg)
         ((ac,) <$> evalRMatchS val pat) <|> matchClauses msg acs
 
 matchClauses msg [] = failEval "No matching clauses"
@@ -163,9 +164,9 @@ evalActor res = do
 
 -- Evaluate runtime unitl it resolves to list of final actor states
 evalAction :: Action -> Value -> Runtime Value
-evalAction Send (TupleV [IntV addr, msg]) =
-    send addr msg >> return (TupleV [IntV addr, msg])
-evalAction Send v =
+evalAction (Send inv pat) (TupleV [IntV addr, msg]) =
+    send addr (Msg inv msg)  >> return (TupleV [IntV addr, msg])
+evalAction (Send True pat) v =
     runtimeError $ "send expects 2-tuple, not " ++ show v
 
 evalAction (Arr (App name inv args)) val = do
@@ -193,7 +194,7 @@ evalAction (Second a) (TupleV [v1, v2]) = do
 evalAction (Second a) v =
     runtimeError $ "Expected 2-tuple value to `second` arrow, instead got " ++ show v
 
-evalAction (Spawn name) val = do
+evalAction (Spawn True name) val = do
     a <- lookupActor (identifier name)
     IntV <$> spawn a val
 
