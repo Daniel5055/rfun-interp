@@ -138,15 +138,17 @@ matchActor [] = error "Program stalled, no matching messages for remaining actor
 matchMessages :: [Msg] -> [ActorClause] -> Eval ([Msg], ActorClause, Substitution)
 matchMessages (m:ms) acs = ((\(ac, s) -> (ms, ac, s)) <$>  matchClauses m acs) <|> matchMessages ms acs
 matchMessages [] acs =
-    case find (\ac -> aClauseMsg ac == Tuple []) acs of
+    case find (\ac -> aClauseMsgs ac == [Tuple []]) acs of
         Just ac -> return ([], ac, idSub)
         Nothing -> failEval "No matching messages"
 
 matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution)
 matchClauses msg (ac:acs) = do
-        let pat = tcLExpr $ aClauseMsg ac
-        let val = tcValue (msgValue msg)
-        ((ac,) <$> evalRMatchS val pat) <|> matchClauses msg acs
+        let pats = map tcLExpr (aClauseMsgs ac)
+        let vals = tcValue (msgValue msg)
+        let anyMatch = foldl1 (<|>) $ map (evalRMatchS vals) pats
+
+        ((ac,) <$> anyMatch) <|> matchClauses msg acs
 
 matchClauses msg [] = failEval "No matching clauses"
 

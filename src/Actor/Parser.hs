@@ -46,7 +46,7 @@ pActorDefClause iTps = L.nonIndented scn $ L.lineFold scn p
 
             -- Parse message, TODO if empty this could be optional
             symbol ":"
-            msg <- pLexprA
+            msg <- many pPat
             symbol "="
             sc'
             ActorClause idt msg <$> pAction

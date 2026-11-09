@@ -45,7 +45,7 @@ data Actor     = Actor    {   actorName     :: Ident
               deriving (Eq, Show)
 
 data ActorClause  = ActorClause { aClauseIdent :: Ident
-                                , aClauseMsg   :: LExpr
+                                , aClauseMsgs   :: [LExpr]
                                 , aClauseBody  :: Action }
               deriving (Eq, Show)
 
