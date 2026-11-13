@@ -13,6 +13,7 @@ import Interp (tcValue, tcLExpr, interp)
 import Control.Applicative
 import Actor.Process
 import Data.List (union)
+import Debug.Trace
 
 
 type Addr = Integer
@@ -76,7 +77,7 @@ spawn a v = Runtime rt
 send :: Addr -> Msg -> Runtime (Addr, Msg)
 send addr msg = Runtime rt
     where
-        rt _ as n =
+        rt _ as n = trace ("Sending" ++ show addr ++ show msg) $
             case send' as addr msg of
                 Just as' -> Right ((addr, msg), as', n)
                 Nothing -> Left "Actor at address does not exist"
@@ -85,10 +86,11 @@ send' :: [ActorState] -> Addr -> Msg -> Maybe [ActorState]
 send' (a:as) addr msg
     | aAddr a == addr = Just (a { aInbox = aInbox a ++ [msg] }:as)
     | otherwise = (a:) <$> send' as addr msg
+send' [] addr msg = error $ "Sending to " ++ show addr ++ " with " ++ show msg ++ "with no actor states to receive"
 
-receive :: Runtime (ActorState, ActorClause, Substitution)
+receive :: Runtime (ActorState, ActorClause, Substitution, Bool)
 receive = Runtime rt
-    where rt env as n = let (state, ac, s, as') = matchActor as in Right ((state, ac, s), as', n)
+    where rt env as n = let (state, ac, s, as', inv) = matchActor as in Right ((state, ac, s, inv), as', n)
 
 getFuncEnv :: Runtime Program
 getFuncEnv = Runtime rt
@@ -123,32 +125,32 @@ lookupActor s = Runtime rt
                 Nothing -> Left $ "Function " ++ s ++ "  does not exist"
 
 
-matchActor :: [ActorState] -> (ActorState, ActorClause, Substitution, [ActorState])
+matchActor :: [ActorState] -> (ActorState, ActorClause, Substitution, [ActorState], Bool)
 matchActor (actorState@(AS addr inbox state actor):as) =
     case res of
-        Right ((ms, ac, s), _) -> (actorState, ac, s, as)
-        Left _ -> (nAs, nAc, nSub, actorState:nAss)
+        Right ((ms, ac, s, inv), _) -> (AS addr ms state actor, ac, s, as, inv)
+        Left _ -> (nAs, nAc, nSub, actorState:nAss, nInv)
 
     where
         res = runEval $ matchMessages inbox (actorClause actor)
-        (nAs, nAc, nSub, nAss) = matchActor as
+        (nAs, nAc, nSub, nAss, nInv) = matchActor as
 matchActor [] = error "Program stalled, no matching messages for remaining actors"
 
 
-matchMessages :: [Msg] -> [ActorClause] -> Eval ([Msg], ActorClause, Substitution)
-matchMessages (m:ms) acs = ((\(ac, s) -> (ms, ac, s)) <$>  matchClauses m acs) <|> matchMessages ms acs
+matchMessages :: [Msg] -> [ActorClause] -> Eval ([Msg], ActorClause, Substitution, Bool)
+matchMessages (m:ms) acs = ((\(ac, s, inv) -> (ms, ac, s, inv)) <$>  matchClauses m acs) <|> matchMessages ms acs
 matchMessages [] acs =
     case find (\ac -> aClauseMsgs ac == [Tuple []]) acs of
-        Just ac -> return ([], ac, idSub)
+        Just ac -> return ([], ac, idSub, True)
         Nothing -> failEval "No matching messages"
 
-matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution)
+matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution, Bool)
 matchClauses msg (ac:acs) = do
         let pats = map tcLExpr (aClauseMsgs ac)
         let vals = tcValue (msgValue msg)
         let anyMatch = foldl1 (<|>) $ map (evalRMatchS vals) pats
 
-        ((ac,) <$> anyMatch) <|> matchClauses msg acs
+        ((ac,,msgInv msg) <$> anyMatch) <|> matchClauses msg acs
 
 matchClauses msg [] = failEval "No matching clauses"
 
@@ -156,9 +158,11 @@ evalActor :: Result -> Runtime Result
 evalActor res = do
     done <- isDone
     if done then return res else do
-    (as, ac, sub) <- receive
-    let (action, env, _) = liftLambda 0 $ (ppAction . subAction sub) (aClauseBody ac)
-    (TupleV [FunV f, val]) <- expandEnv env (evalAction action (aState as))
+    (as, ac, sub, inv) <- receive
+    let sub' = M.insert "self" (tcValue (IntV (aAddr as))) sub
+    let action = subAction sub' (aClauseBody ac)
+    let (action', env, _) = liftLambda 0 (if inv then ppAction action else ppAction (reverseAction action))
+    (TupleV [FunV f, val]) <- expandEnv env (evalAction action' (aState as))
     if f == "" then evalActor $ M.insert (aAddr as) val res else do
         actor <- lookupActor f
         yield as{ aState = val, aActor = actor }
@@ -167,7 +171,7 @@ evalActor res = do
 -- Evaluate runtime unitl it resolves to list of final actor states
 evalAction :: Action -> Value -> Runtime Value
 evalAction (Send inv pat) (TupleV [IntV addr, msg]) =
-    send addr (Msg inv msg)  >> return (TupleV [IntV addr, msg])
+    send addr (Msg inv msg)  >> return (TupleV [])
 evalAction (Send True pat) v =
     runtimeError $ "send expects 2-tuple, not " ++ show v
 

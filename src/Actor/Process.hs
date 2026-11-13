@@ -2,6 +2,10 @@ module Actor.Process where
 import Actor.Ast
 import Ast
 import qualified Data.Map as M
+import Control.Arrow
+import Control.Applicative
+import Data.Maybe (fromMaybe)
+import Debug.Trace
 
 splitA :: Action
 splitA = ArrLambda id1 (LetIn id2 (App eqFunc False [id1, Constr eqConstr []]) (LeftE (Tuple [id1, id2])))
@@ -136,3 +140,70 @@ liftLambda id0 (AEither a1 a2) = (AEither a1' a2', env1 `M.union` env2, id2)
     (a1', env1, id1) = liftLambda id0 a1
     (a2', env2, id2) = liftLambda id1 a2
 liftLambda id a = (a, M.empty, id)
+
+reverseAction :: Action -> Action
+reverseAction (Yield a) = Yield a
+reverseAction a = trace (show a) Comp a' yield
+  where (a', Just yield) = reverseAction' a
+
+reverseAction' :: Action -> (Action, Maybe Action)
+reverseAction' (Arr (Var x)) = (ArrLambda arg (LeftE (App x False [arg])), Nothing)
+  where
+    arg = Var $ makeIdent "_x"
+reverseAction' (Arr (App x inv args)) = (Arr (App x (not inv) args), Nothing)
+reverseAction' (First a) = first First $ reverseAction' a
+reverseAction' (Second a) = first Second $ reverseAction' a
+reverseAction' (Comp a (Yield actor)) = second (<|> Just (Yield actor)) $ reverseAction' a
+reverseAction' (Comp a1 a2) = (Comp a2' a1', yield1 <|> yield2)
+  where
+    (a1', yield1) = reverseAction' a1
+    (a2', yield2) = reverseAction' a2
+reverseAction' (Send inv a) = (Send (not inv) a, Nothing)
+reverseAction' (Spawn inv a) = (Spawn (not inv) a, Nothing)
+reverseAction' (ABoth a1 a2) = (ABoth a1' a2', yield1 <|> yield2)
+  where
+    (a1', yield1) = reverseAction' a1
+    (a2', yield2) = reverseAction' a2
+reverseAction' (AEither a1 a2) = (AEither a1' a2', yield1 <|> yield2)
+  where
+    (a1', yield1) = reverseAction' a1
+    (a2', yield2) = reverseAction' a2
+reverseAction' (ALeft a) = first ALeft $ reverseAction' a
+reverseAction' (ARight a) = first ARight $ reverseAction' a
+
+-- Todo Maybe add checks to avoid bad behaviour here
+reverseAction' (Proc e1 (ApplyCmd a0 e2)) = (Comp a2 (ArrLambda e3 (LeftE e1)), yield)
+  where
+    (a1, yield) = reverseAction' a0
+    (a2, e3) = reverseInExp a1 e2
+
+reverseAction' (Proc e1 (DoCmd ds)) =
+    (Proc _id (DoCmd ([lastD] ++ ds' ++ [DoSeq (ApplyCmd idA e1)])), yield)
+  where
+  -- This might clash with other variables...
+    _id = Var $ makeIdent "_proc"
+    DoSeq cmd = last ds
+    (lastD, yield) = reverseDoAction (DoBind _id cmd)
+    (ds', yields) = foldl (\(d', y) d -> let (d'', y') = reverseDoAction d in (d'':d', y <|> y')) ([], Nothing) $ init ds
+
+reverseAction' (Yield a) = (idA, Just $ Yield a)
+reverseAction' p = error $ "missing pattern for " ++ show p
+
+reverseDoAction :: DoAction -> (DoAction, Maybe Action)
+reverseDoAction (DoBind e1 (ApplyCmd a1 e2)) = (DoBind e3 (ApplyCmd a2 e1), yield)
+  where
+    (a2, yield) = reverseAction' a1 
+    (a3, e3) = reverseInExp a2 e2
+reverseDoAction (DoBind e1 (DoCmd [DoSeq cmd])) = reverseDoAction (DoBind e1 cmd)
+reverseDoAction (DoBind e1 (DoCmd ds)) = (DoBind e2 (DoCmd ([lastD] ++ reverse ds' ++ [DoSeq cmd'])), yield)
+  where
+    DoSeq cmd = last ds
+    (lastD, yield) = reverseDoAction (DoBind e1 cmd)
+    ((DoBind e2 cmd'):ds', yields) = foldl (\(d', y) d -> let (d'', y') = reverseDoAction d in (d' ++ [d''], y <|> y')) ([], Nothing) $ init ds
+reverseDoAction (DoSeq cmd) = error $ "Not possible to handle DoSeq not at end of do with cmd " ++ show cmd
+
+reverseInExp :: Action -> LExpr -> (Action, LExpr)
+reverseInExp a (App name inv args) =  reverseInExp (Comp a (Arr (App name (not inv) argInit))) argLast
+  where argLast = last args
+        argInit = init args
+reverseInExp a exp = (a, exp)
