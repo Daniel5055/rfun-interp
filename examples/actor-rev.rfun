@@ -29,84 +29,32 @@ data MsgType = MsgIn Addr Nat | MsgOut Nat
 -- Spawns an actor and sends it a number
 $actorMain :: Actor () Nat
 $actorMain : () = proc x -> do
-  addr1 <- spawn $actor1 -< (S Z)
+  addr1 <- spawn $actor1 -< ((S Z), Z)
   addr2 <- spawn $actor2 -< addr1
-  () <- send -< (addr1, (MsgIn addr2 x)) 
+  () <- send -< (addr2, (MsgIn x)) 
   yield -< Z 
 
 -- Receives a natural and increments its state
 $actor1 :: Actor MsgType Nat
-$actor1 : (MsgIn addr x) = proc y -> do
+$actor1 : (fromAddr, (MsgIn x)) = proc (y, addr) -> do
   z <- arr (plus x) -< y
-  () <- send -< (addr, (MsgOut z))
-  yield $actor1 -< x
-$actor1 : (MsgOut x) = proc y -> do
-  yield -< (x, y)
+  () <- send (MsgOut _) -< (fromAddr, (MsgOut z))
+  yield $actor1 $actor1 -< (x, addr)
+$actor1 : (fromAddr, (MsgOut x)) = proc (y, Z) -> do
+  z <- arr (plus x) -< y
+  yield -< (z, fromAddr)
 
 $actor2 :: Actor MsgType Addr
-$actor2 : (MsgOut x) = proc addr -> do
-  addr1 <- arr (dup addr) -< () 
-  () <- send! -< (addr, (MsgIn self x))
-  yield $actor3 -< addr1
-  
+$actor2 : (fromAddr, (MsgIn x)) = proc addr -> do
+  () <- send -< (addr, (MsgIn x))
+  yield $actor2 -< fromAddr
+
+$actor2 : (fromAddr, (MsgOut x)) = proc addr -> do
+  () <- send! -< (fromAddr, (MsgOut x))
+  yield $actor3 -< addr
+
+
 $actor3 :: Actor MsgType Addr
-$actor3 : (MsgOut x) = proc addr -> do
-  addr1 <- arr (dup addr) -< () 
-  () <- send -< (addr, (MsgOut x))
-  yield -< addr1
-
--- proc x -> action -< f (g x)
--- proc x -> action -< f (g x)
-
-
---proc x -> do
-  --z <- action -< Z
-  --d <- action -< x
-
---proc d -> do
-  --x -< action -< d
-  --(x, y) -< action -< (a, b)
-
-
-
-
---proc x -> do
-  --...
-  --...
-  --...
-  
-  
-  --action -< x
-
-
---proc x -> do
-  --y <- action -< x
-  --z <- action -< y
-  --action -< z
-
---proc _x -> do
-  --z <- action -< _x
-  --y <- action -< z
-  --x <- action -< y
-  --idA <- x
-
-    
-
-  --a -> do y <- action -< b
-          --action1 -< y
-
-
-proc _proc -> do
-  x <- idA <- _proc
-  send
-
-
-
-
---proc (x, y) -> action -< f y x
-
---x -< action
-
-
---(x <- action)
-
+$actor3 : (fromAddr, (MsgIn x)) = proc addr -> do
+  () <- send -< (fromAddr, (MsgOut x))
+  yield -< addr

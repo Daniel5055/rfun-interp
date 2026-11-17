@@ -94,7 +94,7 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
             symbol "spawn"
             inv <- optional $ symbol "!"
             Spawn (isNothing inv) <$> pActorIdentifier
-        yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier))
+        yield = symbol "yield" >> (Yield <$> optional (try pActorIdentifier) <*> optional (try pActorIdentifier))
         left = symbol "left" >> ALeft <$> pAction'
         right = symbol "right" >> ARight <$> pAction'
         doNot = do
@@ -128,11 +128,11 @@ pPat = constr <|> vari <|> int <|> listf <|> try (parens constrp) <|> try tuple 
     constrp= do c <- pConstructor
                 vars <- many pPat
                 return $ Constr c vars
-    tuple  = do les <- parens $ pLexpr `sepBy` symbol ","
+    tuple  = do les <- parens $ pPat `sepBy` symbol ","
                 return $ Tuple les
-    listc  = do les <- parens $ pLexpr `sepBy1` symbol ":"
+    listc  = do les <- parens $ pPat `sepBy1` symbol ":"
                 return $ List $ foldr ListCons (ListEnd $ last les) (init les)
-    listf  = do les <- brackets $ pLexpr `sepBy` symbol ","
+    listf  = do les <- brackets $ pPat `sepBy` symbol ","
                 return $ List $ foldr ListCons ListNil les
     parLE  = parens pPat
     hole = symbol "_" >> return (makeIdent "_")

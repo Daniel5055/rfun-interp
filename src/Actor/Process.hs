@@ -1,11 +1,12 @@
+{-# LANGUAGE InstanceSigs #-}
 module Actor.Process where
 import Actor.Ast
 import Ast
 import qualified Data.Map as M
-import Control.Arrow
+import Control.Arrow hiding ((<+>))
 import Control.Applicative
-import Data.Maybe (fromMaybe)
-import Debug.Trace
+import Data.Maybe (fromMaybe, isJust)
+import Control.Monad (liftM, ap)
 
 splitA :: Action
 splitA = ArrLambda id1 (LetIn id2 (App eqFunc False [id1, Constr eqConstr []]) (LeftE (Tuple [id1, id2])))
@@ -89,10 +90,12 @@ bind_A u v = u `bindA` Comp fstA v
 ppAction :: Action -> Action
 
 -- Translate do-like arrow notation to pure arrow notation
+ppAction (Proc p (ApplyCmd (Arr (App n inv [arg])) e)) = ArrLambda p (LeftE (App n inv [arg, e]))
 ppAction (Proc p (ApplyCmd a e)) = Comp (ArrLambda p (LeftE e)) a
 ppAction (Proc p (KCmd p' c)) = ppAction (Proc (Tuple [p, p']) c)
 ppAction (Proc p (DoCmd [DoSeq c])) = ppAction (Proc p c)
-ppAction (Proc p (DoCmd ((DoBind e c):ds))) = ppAction (Proc p c) `bindA` ppAction (Proc p (KCmd e (DoCmd ds)))
+ppAction (Proc p (DoCmd ((DoBind e c):ds))) = x
+  where x = ppAction (Proc p c) `bindA` ppAction (Proc p (KCmd e (DoCmd ds)))
 -- Don't see the point of this one in a reversible system
 ppAction (Proc p (DoCmd ((DoSeq c):ds))) = ppAction (Proc p c) `bind_A` ppAction (Proc p (DoCmd ds))
 
@@ -141,69 +144,139 @@ liftLambda id0 (AEither a1 a2) = (AEither a1' a2', env1 `M.union` env2, id2)
     (a2', env2, id2) = liftLambda id1 a2
 liftLambda id a = (a, M.empty, id)
 
-reverseAction :: Action -> Action
-reverseAction (Yield a) = Yield a
-reverseAction a = trace (show a) Comp a' yield
-  where (a', Just yield) = reverseAction' a
+data MsgP = MsgP { msgPInv :: Bool, msgPat :: LExpr  }
+    deriving (Show, Eq)
 
-reverseAction' :: Action -> (Action, Maybe Action)
-reverseAction' (Arr (Var x)) = (ArrLambda arg (LeftE (App x False [arg])), Nothing)
+data Path a = Path{ pathAction :: a, pathMsgs :: [MsgP], choicePathMsgs :: [MsgP], pathYield :: Maybe Action }
+  deriving Show
+
+newtype Paths a = Paths [Path a]
+
+instance Functor Paths where
+  fmap f (Paths ps) = Paths $ map (f <$>) ps
+
+instance Applicative Paths where
+  pure a = Paths [pure a]
+  (<*>) :: Paths (a -> b) -> Paths a -> Paths b
+  (<*>) (Paths f) (Paths ps) = Paths $ zipWith (<*>) f ps
+
+instance Monad Paths where
+  return = pure
+  (>>=) :: Paths a -> (a -> Paths b) -> Paths b
+  (>>=) (Paths ps) f = Paths $ map g ps
+    where
+      g p = p >>= (\a -> let Paths [ps'] = f a in ps')
+
+instance MonadFail Paths where
+  fail = error
+
+instance Monad Path where
+  return = pure
+
+  -- Maybe pick last y instead of alternative
+  (>>=) (Path a p c y) f = Path a' (p ++ p') (c ++ c') (y <|> y')
+    where Path a' p' c' y' = f a
+
+instance Functor Path where
+  fmap = liftM
+
+instance Applicative Path where
+  pure a = Path a [] [] Nothing
+  (<*>) = ap
+
+
+-- Assuming that p2 is always greater or equal in length to p1
+compPath :: (a -> a -> a) -> [Path a] -> [Path a] -> [Path a]
+compPath comp p1 p2 = concatMap f p1
+  where f (Path a pats oPats Nothing) = map (\(Path a' pats' oPats' y') -> Path (comp a a') (pats ++ pats') (oPats ++ oPats') y') p2
+
+optionalPaths :: Paths a -> Paths a
+optionalPaths (Paths ps) = Paths $ map (\(Path a p c y) -> Path a [] (p++c) y) ps
+
+choicePath :: (a -> a -> a) -> Paths a -> Paths a -> Paths a
+choicePath choice p1@(Paths ps1) p2@(Paths ps2)
+  | yields = Paths (ps1 ++ ps2)
+  | mismatch = error "Mismatched yields in path choice"
+  | otherwise = choice <$> optionalPaths p1 <*> optionalPaths p2
+  where
+      yields = all (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
+      mismatch = any (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
+
+reverseAction :: [LExpr] -> Action -> Paths Action
+reverseAction msgs a = Paths (filter noEmptyMsgs (map addSendsAndYields ps))
+  where
+    Paths ps = reversiblePaths a
+    noEmptyMsgs path = not (null (choicePathMsgs path) && null (pathMsgs path))
+    addSendsAndYields path@(Path (Proc e (DoCmd ds)) p o y) =
+        case y of
+          Just (Yield aId1 aId2) -> Path (Comp (Proc e (DoCmd ds'')) (Yield aId2 aId1)) p o Nothing
+          Nothing -> error $ "Error in reverse, Path without yield " ++ show path
+      where
+        (dSeq:ds') = reverse ds
+
+        ds'' = reverse ((dSeq:sends) ++ ds')
+        hole = Var $ makeIdent "_"
+        sends = map (DoBind (Tuple []) . ApplyCmd (Send True hole)) msgs
+
+reversiblePaths :: Action -> Paths Action
+reversiblePaths (Arr (Var x)) = pure $ ArrLambda arg (LeftE (App x False [arg]))
   where
     arg = Var $ makeIdent "_x"
-reverseAction' (Arr (App x inv args)) = (Arr (App x (not inv) args), Nothing)
-reverseAction' (First a) = first First $ reverseAction' a
-reverseAction' (Second a) = first Second $ reverseAction' a
-reverseAction' (Comp a (Yield actor)) = second (<|> Just (Yield actor)) $ reverseAction' a
-reverseAction' (Comp a1 a2) = (Comp a2' a1', yield1 <|> yield2)
-  where
-    (a1', yield1) = reverseAction' a1
-    (a2', yield2) = reverseAction' a2
-reverseAction' (Send inv a) = (Send (not inv) a, Nothing)
-reverseAction' (Spawn inv a) = (Spawn (not inv) a, Nothing)
-reverseAction' (ABoth a1 a2) = (ABoth a1' a2', yield1 <|> yield2)
-  where
-    (a1', yield1) = reverseAction' a1
-    (a2', yield2) = reverseAction' a2
-reverseAction' (AEither a1 a2) = (AEither a1' a2', yield1 <|> yield2)
-  where
-    (a1', yield1) = reverseAction' a1
-    (a2', yield2) = reverseAction' a2
-reverseAction' (ALeft a) = first ALeft $ reverseAction' a
-reverseAction' (ARight a) = first ARight $ reverseAction' a
+
+reversiblePaths (Arr (App x inv args)) = pure $ Arr (App x (not inv) args)
+reversiblePaths (First a) = First <$> reversiblePaths a
+reversiblePaths (Second a) = Second <$> reversiblePaths a
+-- a1 reversed should only have one branch
+reversiblePaths (Comp a1 a2) = Comp <$> reversiblePaths a2 <*> reversiblePaths a1
+reversiblePaths (Send inv pat) = Paths [(pure $ Recv (not inv) pat){ pathMsgs=[MsgP (not inv) (Tuple [addrHole, pat])]}]
+-- TODO: eval matching not smart enough (or too smart) to match multiple variables of same name
+  where addrHole = Var $ makeIdent "_addr" 
+reversiblePaths (Spawn inv actor) = pure $ Spawn (not inv) actor
+-- Maybe aboth and aeither might have distinct ways to reverse?
+reversiblePaths (ABoth a1 a2) = choicePath ABoth (reversiblePaths a1) (reversiblePaths a2)
+reversiblePaths (AEither a1 a2) = choicePath AEither (reversiblePaths a1) (reversiblePaths a2)
+reversiblePaths (ARight a) = ARight <$> optionalPaths (reversiblePaths a)
+reversiblePaths (ALeft a) = ALeft <$> optionalPaths (reversiblePaths a)
+reversiblePaths y@(Yield _ _) = Paths [(pure idA){ pathYield=Just y }]
+
 
 -- Todo Maybe add checks to avoid bad behaviour here
-reverseAction' (Proc e1 (ApplyCmd a0 e2)) = (Comp a2 (ArrLambda e3 (LeftE e1)), yield)
+reversiblePaths (Proc e1 (ApplyCmd a0 e2)) = (\a -> Comp a (ArrLambda e3 (LeftE e1))) . f_a <$> ps
   where
-    (a1, yield) = reverseAction' a0
-    (a2, e3) = reverseInExp a1 e2
+    ps = reversiblePaths a0
+    (f_a, e3) = reverseInExp e2
 
-reverseAction' (Proc e1 (DoCmd ds)) =
-    (Proc _id (DoCmd ([lastD] ++ ds' ++ [DoSeq (ApplyCmd idA e1)])), yield)
+reversiblePaths (Proc e1 (DoCmd ds)) = do
+    ds'<- pds
+    dFirst <- psFirst
+    return $ Proc _id (DoCmd ([dFirst] ++ reverse ds' ++ [DoSeq (ApplyCmd idA e1)]))
   where
-  -- This might clash with other variables...
+  -- TODO This might clash with other variables...
     _id = Var $ makeIdent "_proc"
     DoSeq cmd = last ds
-    (lastD, yield) = reverseDoAction (DoBind _id cmd)
-    (ds', yields) = foldl (\(d', y) d -> let (d'', y') = reverseDoAction d in (d'':d', y <|> y')) ([], Nothing) $ init ds
+    psFirst = reverseDoAction (DoBind _id cmd)
+    pds = mapM reverseDoAction (init ds)
 
-reverseAction' (Yield a) = (idA, Just $ Yield a)
-reverseAction' p = error $ "missing pattern for " ++ show p
-
-reverseDoAction :: DoAction -> (DoAction, Maybe Action)
-reverseDoAction (DoBind e1 (ApplyCmd a1 e2)) = (DoBind e3 (ApplyCmd a2 e1), yield)
+reverseDoAction :: DoAction -> Paths DoAction
+reverseDoAction (DoBind e1 (ApplyCmd a1 e2)) = (\a -> DoBind e3 (ApplyCmd a e1)) . f_a <$> ps
   where
-    (a2, yield) = reverseAction' a1 
-    (a3, e3) = reverseInExp a2 e2
+    ps = reversiblePaths a1
+    (f_a, e3) = reverseInExp e2
 reverseDoAction (DoBind e1 (DoCmd [DoSeq cmd])) = reverseDoAction (DoBind e1 cmd)
-reverseDoAction (DoBind e1 (DoCmd ds)) = (DoBind e2 (DoCmd ([lastD] ++ reverse ds' ++ [DoSeq cmd'])), yield)
+reverseDoAction (DoBind e1 (DoCmd ds)) = do
+  (DoBind e2 cmd'):ds'<- pds
+  dFirst <- psFirst
+  return $ DoBind e2 (DoCmd ([dFirst] ++ reverse ds' ++ [DoSeq cmd']))
   where
     DoSeq cmd = last ds
-    (lastD, yield) = reverseDoAction (DoBind e1 cmd)
-    ((DoBind e2 cmd'):ds', yields) = foldl (\(d', y) d -> let (d'', y') = reverseDoAction d in (d' ++ [d''], y <|> y')) ([], Nothing) $ init ds
+    psFirst = reverseDoAction (DoBind e1 cmd)
+    pds = mapM reverseDoAction (init ds)
 reverseDoAction (DoSeq cmd) = error $ "Not possible to handle DoSeq not at end of do with cmd " ++ show cmd
 
-reverseInExp :: Action -> LExpr -> (Action, LExpr)
-reverseInExp a (App name inv args) =  reverseInExp (Comp a (Arr (App name (not inv) argInit))) argLast
+reverseInExp :: LExpr -> (Action -> Action, LExpr)
+reverseInExp (App name inv args) = (f_a', exp)
   where argLast = last args
         argInit = init args
-reverseInExp a exp = (a, exp)
+        f_a' a = f_a (Comp a (Arr (App name (not inv) argInit)))
+        (f_a, exp) = reverseInExp argLast
+reverseInExp exp = (id, exp)

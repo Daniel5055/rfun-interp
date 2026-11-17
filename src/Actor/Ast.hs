@@ -15,8 +15,9 @@ data Action = Arr LExpr
             | First Action
             | Second Action
             | Send Bool LExpr
+            | Recv Bool LExpr
             | Spawn Bool Ident
-            | Yield (Maybe Ident)
+            | Yield (Maybe Ident) (Maybe Ident)
 
             -- Proc notation
             | Proc LExpr CmdAction

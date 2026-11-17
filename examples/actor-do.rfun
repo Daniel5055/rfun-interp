@@ -31,8 +31,8 @@ $actorMain :: Actor () Nat
 $actorMain : () = proc x -> do
   (y, z) <- arr f1 -< x
   addr <- spawn $actor1 -< y
-  (a, m) <- send -< (addr, z) 
-  yield -< a
+  () <- send -< (addr, z) 
+  yield -< Z
 
 -- Receives a natural and increments its state
 $actor1 :: Actor MsgType Nat

@@ -12,13 +12,13 @@ import qualified Core.Ast as C
 import Interp (tcValue, tcLExpr, interp)
 import Control.Applicative
 import Actor.Process
-import Data.List (union)
+import Data.List (union, (\\), delete)
 import Debug.Trace
 
 
 type Addr = Integer
-data Msg = Msg { msgInv :: Bool, msgValue :: Value }
-    deriving Show
+data Msg = Msg { msgInv :: Bool, msgValue :: Value, msgAddr :: Addr }
+    deriving (Show, Eq)
 
 type Result = M.Map Addr Value
 
@@ -77,7 +77,7 @@ spawn a v = Runtime rt
 send :: Addr -> Msg -> Runtime (Addr, Msg)
 send addr msg = Runtime rt
     where
-        rt _ as n = trace ("Sending" ++ show addr ++ show msg) $
+        rt _ as n = trace ("Sending to " ++ show addr ++ " with " ++ show msg) $
             case send' as addr msg of
                 Just as' -> Right ((addr, msg), as', n)
                 Nothing -> Left "Actor at address does not exist"
@@ -86,11 +86,56 @@ send' :: [ActorState] -> Addr -> Msg -> Maybe [ActorState]
 send' (a:as) addr msg
     | aAddr a == addr = Just (a { aInbox = aInbox a ++ [msg] }:as)
     | otherwise = (a:) <$> send' as addr msg
-send' [] addr msg = error $ "Sending to " ++ show addr ++ " with " ++ show msg ++ "with no actor states to receive"
+send' [] addr msg = error $ "Sending to " ++ show addr ++ " with " ++ show msg ++ " with no actor states to receive"
 
-receive :: Runtime (ActorState, ActorClause, Substitution, Bool)
-receive = Runtime rt
-    where rt env as n = let (state, ac, s, as', inv) = matchActor as in Right ((state, ac, s, inv), as', n)
+getHeadActorState :: Runtime ActorState
+getHeadActorState = Runtime rt
+    where
+        rt _ as n = Right (head as, as, n)
+
+removeHeadActorState :: Runtime ()
+removeHeadActorState = Runtime rt
+    where
+        rt _ (a:as) n = Right ((), as, n)
+
+removeHeadActorStateMsg :: Msg -> Runtime ()
+removeHeadActorStateMsg msg = Runtime rt
+    where
+        rt _ (a:as) n = Right ((), a{ aInbox=newInbox }:as, n)
+            where
+                newInbox = delete msg (aInbox a)
+
+
+receive :: Bool -> LExpr -> Runtime Msg
+receive inv exp = do
+        inbox <- aInbox <$> getHeadActorState
+
+        let pat = tcLExpr exp
+        let vals = zip (map (tcValue . msgValue) inbox) inbox
+        let f (val, msg) = do
+            if msgInv msg == inv
+                then do
+                    sub <- evalRMatchS val pat
+                    return msg
+                else
+                    empty
+        let match = foldl1 (<|>) (map f vals)
+        case runEval match of
+            Right (msg, _) -> do
+                removeHeadActorStateMsg msg
+                inbox <- aInbox <$> getHeadActorState
+                return msg
+            Left _ -> error $ "Tried receiving msg which does not exist for pat " ++ show exp
+
+
+
+-- When called, head actor state presumed to be the actor running
+getAddr :: Runtime Addr
+getAddr = aAddr <$> getHeadActorState
+
+nextActor :: Runtime (ActorState, Path Action, Substitution)
+nextActor = Runtime rt
+    where rt env as n = let (state, path, sub, as') = matchActors as in Right ((state, path, sub), as', n)
 
 getFuncEnv :: Runtime Program
 getFuncEnv = Runtime rt
@@ -125,55 +170,107 @@ lookupActor s = Runtime rt
                 Nothing -> Left $ "Function " ++ s ++ "  does not exist"
 
 
-matchActor :: [ActorState] -> (ActorState, ActorClause, Substitution, [ActorState], Bool)
-matchActor (actorState@(AS addr inbox state actor):as) =
+matchActors :: [ActorState] -> (ActorState, Path Action, Substitution, [ActorState])
+matchActors (actorState@(AS addr inbox state actor):as) =
     case res of
-        Right ((ms, ac, s, inv), _) -> (AS addr ms state actor, ac, s, as, inv)
-        Left _ -> (nAs, nAc, nSub, actorState:nAss, nInv)
+        Right ((newInbox, path, sub), _) -> let
+            newAs = AS addr newInbox state actor
+            in (newAs, path, sub, newAs:as)
+        Left _ -> (a', path', sub', as' ++ [actorState])
 
     where
-        res = runEval $ matchMessages inbox (actorClause actor)
-        (nAs, nAc, nSub, nAss, nInv) = matchActor as
-matchActor [] = error "Program stalled, no matching messages for remaining actors"
+        res = runEval $ matchActorClauses inbox (actorClause actor)
+        (a', path', sub', as') = matchActors as
+matchActors [] = error "Program stalled, no matching messages for remaining actors"
 
 
-matchMessages :: [Msg] -> [ActorClause] -> Eval ([Msg], ActorClause, Substitution, Bool)
-matchMessages (m:ms) acs = ((\(ac, s, inv) -> (ms, ac, s, inv)) <$>  matchClauses m acs) <|> matchMessages ms acs
-matchMessages [] acs =
-    case find (\ac -> aClauseMsgs ac == [Tuple []]) acs of
-        Just ac -> return ([], ac, idSub, True)
-        Nothing -> failEval "No matching messages"
+matchActorClauses :: [Msg] -> [ActorClause] -> Eval ([Msg], Path Action, Substitution)
+matchActorClauses [] [ac] =
+    if aClauseMsgs ac == [Tuple []]
+        then return ([], Path (aClauseBody ac) (map (MsgP True) $ aClauseMsgs ac) [] Nothing, idSub)
+        else failEval "No matching messages"
+matchActorClauses [] _ = failEval "No messages in inbox"
+matchActorClauses inbox (ac:acs) = matchActorClause ac <|> matchActorClauses inbox acs
+    where
+        matchActorClause ac' = forwardsMatch <|> backwardsMatch
+            where
+                Paths (forwards:backwards) = clausePatterns ac
+                forwardsMatch = do
+                    (matchMsgs, p, sub) <- matchPaths inbox (Paths [forwards])
+                    return (inbox \\ matchMsgs, p, sub)
+                backwardsMatch = do
+                    (msgs, p, _) <- matchPaths inbox (Paths backwards)
 
-matchClauses :: Msg -> [ActorClause] -> Eval (ActorClause, Substitution, Bool)
-matchClauses msg (ac:acs) = do
-        let pats = map tcLExpr (aClauseMsgs ac)
-        let vals = tcValue (msgValue msg)
-        let anyMatch = foldl1 (<|>) $ map (evalRMatchS vals) pats
+                    return (inbox, p, idSub)
+matchActorClauses inbox [] = failEval "No matching messages"
 
-        ((ac,,msgInv msg) <$> anyMatch) <|> matchClauses msg acs
+clausePatterns :: ActorClause -> Paths Action
+clausePatterns ac = Paths (forwardsPath:backwardsPaths)
+    where
+        forwardsPath = Path (aClauseBody ac) (map (MsgP True) $ aClauseMsgs ac) [] Nothing
+        Paths backwardsPaths = reverseAction (aClauseMsgs ac) (aClauseBody ac)
 
-matchClauses msg [] = failEval "No matching clauses"
+matchPaths :: [Msg] -> Paths Action -> Eval ([Msg], Path Action, Substitution)
+matchPaths inbox (Paths (p:ps)) =
+    matchPath inbox p <|> matchPaths inbox (Paths ps)
+matchPaths inbox (Paths []) = failEval "No path found"
+
+matchPath :: [Msg] -> Path Action -> Eval ([Msg], Path Action, Substitution)
+matchPath inbox p = do
+        let pats = zip (map (tcLExpr . msgPat) (pathMsgs p)) (pathMsgs p)
+        let vals = zip (map (\msg -> tcValue (TupleV [IntV (msgAddr msg), msgValue msg])) inbox) inbox
+        mAndS <- mapM (\pat -> foldl1 (<|>) $ map (f pat) vals ) pats
+        let (msgs, sub) = foldl (\(msgs, sub') (msg, sub) -> (msg:msgs, M.union sub sub')) ([], M.empty) mAndS
+        return (msgs, p, sub)
+    where
+        f (pat, msgP) (val, msg) = do
+            if msgPInv msgP == msgInv msg
+                then do
+                    sub <- evalRMatchS val pat
+                    return (msg, sub)
+                else
+                    empty
 
 evalActor :: Result -> Runtime Result
 evalActor res = do
     done <- isDone
     if done then return res else do
-    (as, ac, sub, inv) <- receive
-    let sub' = M.insert "self" (tcValue (IntV (aAddr as))) sub
-    let action = subAction sub' (aClauseBody ac)
-    let (action', env, _) = liftLambda 0 (if inv then ppAction action else ppAction (reverseAction action))
-    (TupleV [FunV f, val]) <- expandEnv env (evalAction action' (aState as))
-    if f == "" then evalActor $ M.insert (aAddr as) val res else do
-        actor <- lookupActor f
-        yield as{ aState = val, aActor = actor }
-        evalActor res
+    (as, path, sub) <- nextActor
 
--- Evaluate runtime unitl it resolves to list of final actor states
+    traceM "----------------"
+    traceM $ "Found path for Actor " ++ show (aAddr as)
+
+    let sub' = M.insert "self" (tcValue (IntV (aAddr as))) sub
+    let a = (ppAction . subAction sub') (pathAction path)
+    let (action, env, _) = liftLambda 0 a
+    (TupleV [FunV f, val]) <- expandEnv env (evalAction action (aState as))
+
+    -- Head actor inbox maybe be changed, so get latest version
+    as' <- getHeadActorState
+    removeHeadActorState
+
+    if f == ""
+        then do
+            traceM $ "Yielding to end with state " ++ show val
+            evalActor $ M.insert (aAddr as) val res
+        else do
+            actor <- lookupActor f
+            traceM $ "Yielding to " ++ f ++ " with state " ++ show val
+            yield as'{ aState = val, aActor = actor }
+            evalActor res
+
+-- Evaluate runtime until it resolves to list of final actor states
 evalAction :: Action -> Value -> Runtime Value
-evalAction (Send inv pat) (TupleV [IntV addr, msg]) =
-    send addr (Msg inv msg)  >> return (TupleV [])
+evalAction (Send inv pat) (TupleV [IntV targetAddr, msg]) = do
+    sourceAddr <- getAddr
+    send targetAddr (Msg inv msg sourceAddr)
+    return $ TupleV []
 evalAction (Send True pat) v =
     runtimeError $ "send expects 2-tuple, not " ++ show v
+
+evalAction (Recv inv pat) val = do
+    msg <- receive inv pat
+    return $ TupleV [IntV (msgAddr msg), msgValue msg]
 
 evalAction (Arr (App name inv args)) val = do
     env <- getFuncEnv
@@ -204,8 +301,8 @@ evalAction (Spawn True name) val = do
     a <- lookupActor (identifier name)
     IntV <$> spawn a val
 
-evalAction (Yield (Just name)) val = return $ TupleV [FunV (identifier name), val]
-evalAction (Yield Nothing) val = return $ TupleV [FunV "", val]
+evalAction (Yield (Just name) _) val = return $ TupleV [FunV (identifier name), val]
+evalAction (Yield Nothing _) val = return $ TupleV [FunV "", val]
 
 -- Arrow choice behaviour defined by this
 evalAction (ABoth a1 a2) (ConstrV "_left" [x]) = do
@@ -230,6 +327,8 @@ evalAction a v = runtimeError $ "Missing eval action clause for " ++ show a
 interpActor :: ActorProgram -> String -> Value -> Either String [Value]
 interpActor p i val = do
     (res, as', _) <- run (evalActor M.empty) env as addr
+    traceM "----------------"
+    traceM "All actors terminated with empty inboxes:"
     if not $ null as' then Left "Actors left hanging" else
         return $ M.elems res
     where
