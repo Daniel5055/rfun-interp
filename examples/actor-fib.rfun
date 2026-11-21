@@ -1,0 +1,146 @@
+---------------------------------------------------------------
+---- ARITHMETIC
+---------------------------------------------------------------
+
+-- We can define the natural numbers as Peano numbers
+data Nat = Z | S Nat
+
+-- This will give the intuitive definition of addition
+plus :: Nat -> Nat <-> Nat
+plus Z     x = x
+plus (S y) x =
+  let x' = plus y x
+  in  (S x')
+
+dup :: a -> () <-> a
+dup x () =  eq! x Eq
+
+len :: [a] -> () <-> Nat
+len (x:xs) () = 
+  let len' = len xs ()
+  in (S len')
+len [] () = Z
+
+-- Need to split after functions to get around fmp
+splitAfter :: [a] -> a <-> [a]
+splitAfter xs y =
+  let
+    l0 = len xs ()
+    (l1, xs') = splitAfter' xs y
+    l2 = len xs' ()
+    l3 = plus l1 l2
+    () = len! xs l3
+  in xs'
+
+-- Split a list between a given value
+splitAfter' :: [a] -> a <-> (a, [a])
+splitAfter' (x:xs) y =
+    case (eq x y) of
+      (Neq y') ->
+        let (n, res) = splitAfter' xs y'
+        in ((S n), res) 
+      Eq ->
+        let res = (eq! (x:xs) Eq)
+        in (Z, res)
+splitAfter' [] y = (Z, [y])
+
+-- Gotten from core rfun list.rfun file
+reverse :: [a] <-> [a]
+reverse xs =
+  let l = len xs ()
+      ([], ys, l') = move (xs, [], l)
+      () = len! ys l'
+  in ys
+
+move :: [a] <-> [a]
+move (x, l, Z) = (x, l, Z)
+move ((x:xs), l, (S s)) =
+  let (ys, ls, s') = move (xs, (x:l), s)
+  in (ys, ls, (S s'))
+
+---------------------------------------------------------------
+---- ACTORS
+---------------------------------------------------------------
+
+
+-- spawn :: (Actor a b c) -> b -> Action () Addr
+-- send :: Action (Addr, a) (Addr, a)
+-- `yield` and `: ()` are structure for defining an actor
+
+data MsgType = MsgIn Nat | MsgOut Nat
+
+-- Spawns an actor and sends it a number
+$actorMain :: Actor () Nat
+$actorMain : () = proc n -> do
+      a <- spawn $orc -< n
+      () <- send -< (a, (OSpawn []))
+      yield -< Z
+
+$orc : (Z, (OSpawn [])) = proc n -> do
+  () <- send -< (self, (OSpawn []))
+  yield $orc $orc -< n
+
+$orc : (selfAddr, (OSpawn as)) = proc n -> do
+  l <- arr (len as) -< ()
+  case (eq n l) of 
+    (Neq l') -> do
+      a <- spawn $fib -< 1
+      () <- send -< (selfAddr, (OSpawn (a:as)))
+      yield $orc $orc -< n
+    Eq -> do
+      () <- arr (len! as) -< n
+      a <- spawn $dispatcher -< (Z,as,[])
+      () <- send -< (a, DStart)
+      yield $orc $orc -< Z
+
+$orc : (a, (ORes)) = proc Z -> do
+  yield -< a
+
+
+$dispatcher :: Actor FibAdd (Addr, Nat, [Addr])
+$dispatcher : (fromAddr, (DStart)) = proc (Z,(a:as),ns) -> do
+  () <- send -< (a, (FAddNext 1))
+  yield $dispatcher $dispatcher -< (fromAddr,as,ns)
+
+$dispatcher : (fromAddr, (DAdd oldVal val)) = proc (a,as,ns) -> do
+  case as of
+    (nextA:(a':as')) -> do
+      val' <- arr (dup val) -< ()
+      () <- send -< (a', (FAdd val))
+      () <- send -< (self, (DSend (nextA:as') val'))
+      yield $dispatcher $dispatcher -< (a, [],(oldVal:ns))
+    [] -> do
+        () <- send -< (a, (ORes))
+        ns' <- arr reverse -< (val:(oldVal:ns))
+        yield -< (Z, fromAddr, ns')
+    [a'] -> do
+      () <- send -< (a', (FAddNext val))
+      yield $dispatcher $dispatcher -< (a, [], (oldVal:ns))
+
+$dispatcher : (selfAddr, (DSend (nextA:(a':as')) val)) (fromAddr, (DAddAck val')) = proc (a,as,ns) -> do 
+  () <- send -< (a', (FAdd val))
+  () <- send -< (selfAddr, (DSend (nextA:as') val'))
+  yield $dispatcher $dispatcher -< (a,(fromAddr:as),ns)
+
+$dispatcher : (self, (DSend [nextA] val)) (fromAddr, (DAddAck val')) = proc (a,as,ns) -> do
+  Eq <- arr (eq val) -< val'
+  () <- send -< (nextA, (FAddNext val))
+  as' <- arr reverse -< as
+  yield $dispatcher $dispatcher -< (a,(fromAddr:as'),ns)
+
+$fib :: Actor FibMsg Nat
+$fib : (fromAddr, (FAdd val)) = proc n -> do
+  n' <- arr (plus val) -< n
+  () <- send -< (fromAddr, (DAddAck val))
+  yield $fib $fib -< n'
+
+$fib : (fromAddr, (FAddNext val)) = proc n -> do
+  n' <- arr (dup n) -< ()
+  () <- send -< (fromAddr, (DAdd val n))
+  yield -< n'
+
+
+
+-- Main
+-- Dispatcher
+-- fib worker

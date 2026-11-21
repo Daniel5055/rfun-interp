@@ -61,7 +61,7 @@ caseA p e cs =
     lf e = Constr _left [e]
     rf e = Constr _right [e]
 
-    vars = map ((Tuple . map Var) . (\(e, _) -> boundVars e)) cs
+    vars = map ((Tuple . map Var) . (\(e, _) -> boundVars (Tuple [p, e]))) cs
     binaries = take (length cs) $ iterate (rf.) lf
     cases = zipWith ($) binaries vars
     -- right most case (idA) is filler and should not be reached ever
@@ -151,6 +151,7 @@ data Path a = Path{ pathAction :: a, pathMsgs :: [MsgP], choicePathMsgs :: [MsgP
   deriving Show
 
 newtype Paths a = Paths [Path a]
+  deriving Show
 
 instance Functor Paths where
   fmap f (Paths ps) = Paths $ map (f <$>) ps
@@ -161,11 +162,17 @@ instance Applicative Paths where
   (<*>) (Paths f) (Paths ps) = Paths $ zipWith (<*>) f ps
 
 instance Monad Paths where
+  -- Assume result of f is single path
   return = pure
   (>>=) :: Paths a -> (a -> Paths b) -> Paths b
-  (>>=) (Paths ps) f = Paths $ map g ps
+  (>>=) (Paths ps) f = 
+    Paths $ map g ps
     where
-      g p = p >>= (\a -> let Paths [ps'] = f a in ps')
+      g p = 
+        p >>= (\a ->
+          case f a of
+            Paths [p] -> p
+            Paths ps' -> error $ "cannot handle paths of length " ++ show (length ps'))
 
 instance MonadFail Paths where
   fail = error
@@ -202,6 +209,11 @@ choicePath choice p1@(Paths ps1) p2@(Paths ps2)
       yields = all (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
       mismatch = any (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
 
+catPaths :: [Paths a] -> Paths a
+catPaths ((Paths ps1):pss) = Paths (ps1 ++ ps2)
+  where (Paths ps2) = catPaths pss
+catPaths [] = Paths []
+
 reverseAction :: [LExpr] -> Action -> Paths Action
 reverseAction msgs a = Paths (filter noEmptyMsgs (map addSendsAndYields ps))
   where
@@ -216,7 +228,8 @@ reverseAction msgs a = Paths (filter noEmptyMsgs (map addSendsAndYields ps))
 
         ds'' = reverse ((dSeq:sends) ++ ds')
         hole = Var $ makeIdent "_"
-        sends = map (DoBind (Tuple []) . ApplyCmd (Send True hole)) msgs
+        -- TODO in future could have sending be inverse of message bit
+        sends = map (DoBind (Tuple []) . ApplyCmd (Send False hole)) msgs
 
 reversiblePaths :: Action -> Paths Action
 reversiblePaths (Arr (Var x)) = pure $ ArrLambda arg (LeftE (App x False [arg]))
@@ -230,9 +243,9 @@ reversiblePaths (Second a) = Second <$> reversiblePaths a
 reversiblePaths (Comp a1 a2) = Comp <$> reversiblePaths a2 <*> reversiblePaths a1
 reversiblePaths (Send inv pat) = Paths [(pure $ Recv (not inv) pat){ pathMsgs=[MsgP (not inv) (Tuple [addrHole, pat])]}]
 -- TODO: eval matching not smart enough (or too smart) to match multiple variables of same name
-  where addrHole = Var $ makeIdent "_addr" 
+  where addrHole = Var $ makeIdent "_addr"
 reversiblePaths (Spawn inv actor) = pure $ Spawn (not inv) actor
--- Maybe aboth and aeither might have distinct ways to reverse?
+-- Maybe aBoth and aEither might have distinct ways to reverse?
 reversiblePaths (ABoth a1 a2) = choicePath ABoth (reversiblePaths a1) (reversiblePaths a2)
 reversiblePaths (AEither a1 a2) = choicePath AEither (reversiblePaths a1) (reversiblePaths a2)
 reversiblePaths (ARight a) = ARight <$> optionalPaths (reversiblePaths a)
@@ -246,10 +259,8 @@ reversiblePaths (Proc e1 (ApplyCmd a0 e2)) = (\a -> Comp a (ArrLambda e3 (LeftE 
     ps = reversiblePaths a0
     (f_a, e3) = reverseInExp e2
 
-reversiblePaths (Proc e1 (DoCmd ds)) = do
-    ds'<- pds
-    dFirst <- psFirst
-    return $ Proc _id (DoCmd ([dFirst] ++ reverse ds' ++ [DoSeq (ApplyCmd idA e1)]))
+reversiblePaths (Proc e1 (DoCmd ds)) =
+    (\d ds' -> Proc _id (DoCmd ([d] ++ reverse ds' ++ [DoSeq (ApplyCmd idA e1)]))) <$> psFirst <*> pds
   where
   -- TODO This might clash with other variables...
     _id = Var $ makeIdent "_proc"
@@ -271,7 +282,22 @@ reverseDoAction (DoBind e1 (DoCmd ds)) = do
     DoSeq cmd = last ds
     psFirst = reverseDoAction (DoBind e1 cmd)
     pds = mapM reverseDoAction (init ds)
+reverseDoAction (DoBind (Var p) (CaseOfCmd e1 cs))
+  | identifier p == "_proc" = catPaths (map f cs)
+
+  where
+    (f_a, e2) = reverseInExp e1
+    cs' = map snd cs
+    f :: (LExpr, CmdAction) -> Paths DoAction
+    f (pat, c) =
+      (\a -> DoBind e2 (ApplyCmd a (Var p))) . f_a <$> reversiblePaths (Proc pat c)
+
+reverseDoAction (DoBind e (CaseOfCmd e1 cs)) = error "I haven't implemented bind cases yet"
+
+
+
 reverseDoAction (DoSeq cmd) = error $ "Not possible to handle DoSeq not at end of do with cmd " ++ show cmd
+reverseDoAction d = error $ "No case for " ++ show d
 
 reverseInExp :: LExpr -> (Action -> Action, LExpr)
 reverseInExp (App name inv args) = (f_a', exp)

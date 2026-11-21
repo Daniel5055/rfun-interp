@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 module Actor.Interp where
-import Ast (Value (TupleV, IntV, FunV, ConstrV), LExpr (App, Var, Tuple, Constr, List), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE, LetIn), Ident (identifier), Program, LExprList (ListNil, ListEnd, ListCons))
+import Ast (Value (TupleV, IntV, FunV, ConstrV), LExpr (App, Var, Tuple, Constr, List, Int), Func (Func, funcName), makeIdent, Clause (..), Guard (Guard), Expr (CaseOf, LeftE, LetIn), Ident (identifier), Program, LExprList (ListNil, ListEnd, ListCons))
 import Actor.Ast
 import Control.Monad (liftM, ap)
 import System.Posix.Internals (rtsIsThreaded_)
@@ -23,7 +23,10 @@ data Msg = Msg { msgInv :: Bool, msgValue :: Value, msgAddr :: Addr }
 type Result = M.Map Addr Value
 
 data ActorState = AS { aAddr :: Addr, aInbox :: [Msg], aState :: Value, aActor :: Actor }
-    deriving Show
+
+instance Show ActorState where
+    show (AS addr inbox val action) =
+        "\nActor " ++ show addr ++ " with val " ++ show val ++ " with inbox:\n\t" ++ show inbox ++ "\n"
 
 newtype Runtime a = Runtime { run :: DefEnv -> [ActorState] -> Addr -> Either String (a, [ActorState], Addr) }
 
@@ -135,7 +138,12 @@ getAddr = aAddr <$> getHeadActorState
 
 nextActor :: Runtime (ActorState, Path Action, Substitution)
 nextActor = Runtime rt
-    where rt env as n = let (state, path, sub, as') = matchActors as in Right ((state, path, sub), as', n)
+    where
+        rt env as n =
+            let (state, path, sub, as') = matchActors as in
+                if aAddr state == -1
+                    then error $ "Failed to find a path with states:\n" ++ show as
+                    else Right ((state, path, sub), as', n)
 
 getFuncEnv :: Runtime Program
 getFuncEnv = Runtime rt
@@ -181,8 +189,7 @@ matchActors (actorState@(AS addr inbox state actor):as) =
     where
         res = runEval $ matchActorClauses inbox (actorClause actor)
         (a', path', sub', as') = matchActors as
-matchActors [] = error "Program stalled, no matching messages for remaining actors"
-
+matchActors [] = (AS (-1) [] (IntV 0) undefined , undefined, undefined, [])
 
 matchActorClauses :: [Msg] -> [ActorClause] -> Eval ([Msg], Path Action, Substitution)
 matchActorClauses [] [ac] =
@@ -238,7 +245,7 @@ evalActor res = do
     (as, path, sub) <- nextActor
 
     traceM "----------------"
-    traceM $ "Found path for Actor " ++ show (aAddr as)
+    traceM $ "Found path for Actor " ++ show (aAddr as) ++ " with state " ++ show (aState as) 
 
     let sub' = M.insert "self" (tcValue (IntV (aAddr as))) sub
     let a = (ppAction . subAction sub') (pathAction path)
