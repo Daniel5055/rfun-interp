@@ -27,6 +27,7 @@ instance Show Msg where
 type Result = M.Map Addr Value
 
 data ActorState = AS { aAddr :: Addr, aInbox :: [Msg], aState :: Value, aActor :: Actor }
+    deriving Eq
 
 instance Show ActorState where
     show (AS addr inbox val action) =
@@ -80,6 +81,22 @@ spawn :: Actor -> Value -> Runtime Addr
 spawn a v = Runtime rt
     where
         rt _ as nextAddr = Right (nextAddr, as ++ [AS nextAddr [] v a], nextAddr + 1)
+
+kill :: Ident -> Addr -> Runtime Value
+kill name addr = Runtime rt
+    where
+        rt _ as nextAddr = 
+            case find ((addr==) . aAddr) as of
+                Just a ->
+                    if null (aInbox a)
+                        then if identifier (actorName (aActor a)) == identifier name
+                            then if addr /= aAddr (head as)
+                                then Right (aState a, delete a as, nextAddr)
+                                else Left "Cannot delete self"
+                            else Left $ "Killed actor is not the same as assetion (" ++ show (actorName (aActor a)) ++ " vs "  ++ show name ++ ")"
+                        else Left "Cannot delete actor with non-empty inbox"
+                Nothing ->
+                    Left "Cannot find actor with address to delete"
 
 send :: Addr -> Msg -> Runtime (Addr, Msg)
 send addr msg = Runtime rt
@@ -311,6 +328,8 @@ evalAction (Second a) v =
 evalAction (Spawn True name) val = do
     a <- lookupActor (identifier name)
     IntV <$> spawn a val
+
+evalAction (Spawn False name) (IntV addr) = kill name addr
 
 evalAction (Yield (Just name) _) val = return $ TupleV [FunV (identifier name), val]
 evalAction (Yield Nothing _) val = return $ TupleV [FunV "", val]

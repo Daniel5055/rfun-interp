@@ -56,10 +56,11 @@ $actorMain :: Actor () Nat
 $actorMain : () = proc n -> do
       a <- spawn $orc -< n
       () <- send -< (a, (OSpawn []))
-      yield -< Z
+      yield $actorMain -< Z
 
 $orc : (Z, (OSpawn [])) = proc n -> do
   () <- send -< (self, (OSpawn []))
+  Z <- spawn! $actorMain -< Z
   yield $orc $orc -< n
 
 $orc : (selfAddr, (OSpawn as)) = proc n -> do
@@ -86,7 +87,11 @@ $orc1 : (self, (ORes val))! = proc a -> do
   
 $orc1 : (self, (ORes val)) = proc a -> do
   () <- send -< (a, DEnd)
-  yield -< val
+  yield $orc1 $orc1 -< val
+
+$orc1 : (fromAddr, (OEndAck i)) = proc val -> do
+  (Z, [], [], []) <- spawn! $dispatcher -< fromAddr
+  yield -< (i, val)
 
 
 $dispatcher :: Actor FibAdd (Addr, Nat, [Addr])
@@ -94,21 +99,22 @@ $dispatcher : (fromAddr, DStart) = proc (Z,[],(a:as),ns) -> do
   () <- send (FAddNext Z) -< (a, (FAddNext Z))
   yield $dispatcher $dispatcher -< (fromAddr,[],as,ns)
 
-$dispatcher : (fromAddr, DEnd) = proc (Z,das,as,ns) -> do
+$dispatcher : (fromAddr, DEnd) = proc (Z,[],as,ns) -> do
   case as of
-    (a:as') -> do
-      () <- send (FEnd) -< (a, FEnd)
-      () <- send (DEndSend) -< (self, DEndSend)
-      yield $dispatcher $dispatcher -< (fromAddr,das,as',ns)
-    [] -> yield -< (fromAddr,das,[],ns)
+    as' -> do
+      () <- send (DEndSend Z) -< (self, (DEndSend Z))
+      yield $dispatcher $dispatcher -< (fromAddr,[],as',ns)
+    [] -> do yield -< (fromAddr,[],[],ns)
 
-$dispatcher : (self, DEndSend) = proc (a,das,as,ns) -> do
+$dispatcher : (self, (DEndSend i)) = proc (a,[],as,ns) -> do
   case as of
     (a':as') -> do
-      () <- send (FEnd) -< (a', FEnd)
-      () <- send (DEndSend)-< (self, DEndSend)
-      yield $dispatcher $dispatcher -< (a,das,as',ns)
-    [] -> yield -< (a,das,[],ns)
+      (S Z) <- spawn! $fib -< a'
+      () <- send (DEndSend (S _))-< (self, (DEndSend (S i)))
+      yield $dispatcher $dispatcher -< (a,[],as',ns)
+    [] -> do 
+      () <- send (OEndAck _) -< (a, (OEndAck i))
+      yield $dispatcher $dispatcher -< (Z,[],[],ns)
 
 $dispatcher : (fromAddr, (DAdd oldVal val)) = proc (a,das,as,ns) -> do
   case as of
@@ -136,7 +142,7 @@ $dispatcher : (self, (DSend val i)) = proc (a,das,as,ns) -> do
 
 $dispatcher : (fromAddr, (DAddAck val i)) = proc (a,das,as,ns) -> do
   as' <- arr (delete! i) -< (as, fromAddr)
-  () <- send (DSend _ _) -< (self, (DSend val (S i)))
+  () <- send (DSend _ (S (S _))) -< (self, (DSend val (S i)))
   yield $dispatcher $dispatcher -< (a, das, as',ns)
 
 $fib :: Actor FibMsg Nat
@@ -149,6 +155,3 @@ $fib : (fromAddr, (FAddNext val)) = proc n -> do
   n' <- arr (dup n) -< ()
   () <- send (DAdd _ _) -< (fromAddr, (DAdd val n))
   yield $fib $fib -< n'
-
-$fib : (fromAddr, FEnd) = proc (S Z) -> do
-  yield -< fromAddr
