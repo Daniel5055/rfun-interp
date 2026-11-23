@@ -21,29 +21,6 @@ len (x:xs) () =
   in (S len')
 len [] () = Z
 
--- Need to split after functions to get around fmp
-splitAfter :: [a] -> a <-> [a]
-splitAfter xs y =
-  let
-    l0 = len xs ()
-    (l1, xs') = splitAfter' xs y
-    l2 = len xs' ()
-    l3 = plus l1 l2
-    () = len! xs l3
-  in xs'
-
--- Split a list between a given value
-splitAfter' :: [a] -> a <-> (a, [a])
-splitAfter' (x:xs) y =
-    case (eq x y) of
-      (Neq y') ->
-        let (n, res) = splitAfter' xs y'
-        in ((S n), res) 
-      Eq ->
-        let res = (eq! (x:xs) Eq)
-        in (Z, res)
-splitAfter' [] y = (Z, [y])
-
 -- Gotten from core rfun list.rfun file
 reverse :: [a] <-> [a]
 reverse xs =
@@ -58,10 +35,15 @@ move ((x:xs), l, (S s)) =
   let (ys, ls, s') = move (xs, (x:l), s)
   in (ys, ls, (S s'))
 
+delete :: Nat -> [a] <-> ([a], a)
+delete Z (a:as) = (as, a)  
+delete (S n) (a:as) =
+  let (as', a') = delete n as
+  in ((a:as'), a')
+
 ---------------------------------------------------------------
 ---- ACTORS
 ---------------------------------------------------------------
-
 
 -- spawn :: (Actor a b c) -> b -> Action () Addr
 -- send :: Action (Addr, a) (Addr, a)
@@ -89,58 +71,84 @@ $orc : (selfAddr, (OSpawn as)) = proc n -> do
       yield $orc $orc -< n
     Eq -> do
       () <- arr (len! as) -< n
-      a <- spawn $dispatcher -< (Z,as,[])
+      a <- spawn $dispatcher -< (Z,[],as,[])
       () <- send -< (a, DStart)
       yield $orc $orc -< Z
 
-$orc : (a, (ORes)) = proc Z -> do
-  yield -< a
+$orc : (a, (ORes val)) = proc Z -> do
+  val' <- arr (dup val) -< ()
+  () <- send! -< (a, (ORes val))
+  yield $orc1 $orc1 -< val'
+
+$orc1 : (self, (ORes val))! = proc a -> do
+  () <- send -< (a, DStart)
+  yield $orc1 $orc1 -< val
+  
+$orc1 : (self, (ORes val)) = proc a -> do
+  () <- send -< (a, DEnd)
+  yield -< val
 
 
 $dispatcher :: Actor FibAdd (Addr, Nat, [Addr])
-$dispatcher : (fromAddr, (DStart)) = proc (Z,(a:as),ns) -> do
-  () <- send -< (a, (FAddNext 1))
-  yield $dispatcher $dispatcher -< (fromAddr,as,ns)
+$dispatcher : (fromAddr, DStart) = proc (Z,[],(a:as),ns) -> do
+  () <- send (FAddNext Z) -< (a, (FAddNext Z))
+  yield $dispatcher $dispatcher -< (fromAddr,[],as,ns)
 
-$dispatcher : (fromAddr, (DAdd oldVal val)) = proc (a,as,ns) -> do
+$dispatcher : (fromAddr, DEnd) = proc (Z,das,as,ns) -> do
   case as of
-    (nextA:(a':as')) -> do
-      val' <- arr (dup val) -< ()
-      () <- send -< (a', (FAdd val))
-      () <- send -< (self, (DSend (nextA:as') val'))
-      yield $dispatcher $dispatcher -< (a, [],(oldVal:ns))
+    (a:as') -> do
+      () <- send (FEnd) -< (a, FEnd)
+      () <- send (DEndSend) -< (self, DEndSend)
+      yield $dispatcher $dispatcher -< (fromAddr,das,as',ns)
+    [] -> yield -< (fromAddr,das,[],ns)
+
+$dispatcher : (self, DEndSend) = proc (a,das,as,ns) -> do
+  case as of
+    (a':as') -> do
+      () <- send (FEnd) -< (a', FEnd)
+      () <- send (DEndSend)-< (self, DEndSend)
+      yield $dispatcher $dispatcher -< (a,das,as',ns)
+    [] -> yield -< (a,das,[],ns)
+
+$dispatcher : (fromAddr, (DAdd oldVal val)) = proc (a,das,as,ns) -> do
+  case as of
     [] -> do
-        () <- send -< (a, (ORes))
-        ns' <- arr reverse -< (val:(oldVal:ns))
-        yield -< (Z, fromAddr, ns')
-    [a'] -> do
-      () <- send -< (a', (FAddNext val))
-      yield $dispatcher $dispatcher -< (a, [], (oldVal:ns))
+      () <- send (ORes _) -< (a, (ORes val))
+      ns' <- arr reverse -< (oldVal:ns)
+      yield $dispatcher $dispatcher -< (Z, (fromAddr:das), [], ns')
+    as' -> do
+      () <- send (DSend _ (S Z)) -< (self, (DSend val (S Z)))
+      yield $dispatcher $dispatcher -< (a, (fromAddr:das), as', (oldVal:ns))
 
-$dispatcher : (selfAddr, (DSend (nextA:(a':as')) val)) (fromAddr, (DAddAck val')) = proc (a,as,ns) -> do 
-  () <- send -< (a', (FAdd val))
-  () <- send -< (selfAddr, (DSend (nextA:as') val'))
-  yield $dispatcher $dispatcher -< (a,(fromAddr:as),ns)
+$dispatcher : (self, (DSend val i)) = proc (a,das,as,ns) -> do 
+  l <- arr (len as) -< ()
+  case (eq i l) of
+    (Neq l') -> do
+      () <- arr (len! as) -< l'
+      (as', a') <- arr (delete i) -< as
+      () <- send (FAdd _ _) -< (a', (FAdd val i))
+      yield $dispatcher $dispatcher -< (a,das,as',ns)
+    Eq -> do
+      () <- arr (len! as) -< i
+      (as', a') <- arr (delete Z) -< as
+      () <- send (FAddNext _) -< (a', (FAddNext val))
+      yield $dispatcher $dispatcher -< (a, das, as',ns)
 
-$dispatcher : (self, (DSend [nextA] val)) (fromAddr, (DAddAck val')) = proc (a,as,ns) -> do
-  Eq <- arr (eq val) -< val'
-  () <- send -< (nextA, (FAddNext val))
-  as' <- arr reverse -< as
-  yield $dispatcher $dispatcher -< (a,(fromAddr:as'),ns)
+$dispatcher : (fromAddr, (DAddAck val i)) = proc (a,das,as,ns) -> do
+  as' <- arr (delete! i) -< (as, fromAddr)
+  () <- send (DSend _ _) -< (self, (DSend val (S i)))
+  yield $dispatcher $dispatcher -< (a, das, as',ns)
 
 $fib :: Actor FibMsg Nat
-$fib : (fromAddr, (FAdd val)) = proc n -> do
+$fib : (fromAddr, (FAdd val i)) = proc n -> do
   n' <- arr (plus val) -< n
-  () <- send -< (fromAddr, (DAddAck val))
+  () <- send (DAddAck _ _) -< (fromAddr, (DAddAck val i))
   yield $fib $fib -< n'
 
 $fib : (fromAddr, (FAddNext val)) = proc n -> do
   n' <- arr (dup n) -< ()
-  () <- send -< (fromAddr, (DAdd val n))
-  yield -< n'
+  () <- send (DAdd _ _) -< (fromAddr, (DAdd val n))
+  yield $fib $fib -< n'
 
-
-
--- Main
--- Dispatcher
--- fib worker
+$fib : (fromAddr, FEnd) = proc (S Z) -> do
+  yield -< fromAddr

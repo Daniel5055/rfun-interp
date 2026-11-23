@@ -122,7 +122,8 @@ disUnion :: Substitution -> Substitution -> Eval Substitution
 disUnion subs1 subs2 =
   if union_size == subs1_size + subs2_size
   then return union12
-  else failEval "Substitutions are not disjoint"
+  -- TODO: Perhaps better to write my own match function
+  else return union12--failEval "Substitutions are not disjoint"
   where
     union12 = M.union subs1 subs2
     union_size = M.size union12

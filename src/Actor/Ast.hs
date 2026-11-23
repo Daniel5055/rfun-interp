@@ -3,6 +3,12 @@ module Actor.Ast where
 import Ast (LExpr, Ident, BType, Func, Expr)
 import qualified Data.Map as M
 
+data MsgP = MsgP { msgPInv :: Bool, msgPat :: LExpr  }
+    deriving (Eq)
+
+instance Show MsgP where
+    show (MsgP inv pat) = "( " ++ show pat ++ (if inv then "" else "!") ++ " )"
+
 type ActorProgram = [Def]
 
 data Def   = ADef Actor
@@ -46,7 +52,7 @@ data Actor     = Actor    {   actorName     :: Ident
               deriving (Eq, Show)
 
 data ActorClause  = ActorClause { aClauseIdent :: Ident
-                                , aClauseMsgs   :: [LExpr]
+                                , aClauseMsgs   :: [MsgP]
                                 , aClauseBody  :: Action }
               deriving (Eq, Show)
 

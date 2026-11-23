@@ -91,7 +91,7 @@ ppAction :: Action -> Action
 
 -- Translate do-like arrow notation to pure arrow notation
 ppAction (Proc p (ApplyCmd (Arr (App n inv [arg])) e)) = ArrLambda p (LeftE (App n inv [arg, e]))
-ppAction (Proc p (ApplyCmd a e)) = Comp (ArrLambda p (LeftE e)) a
+ppAction (Proc p (ApplyCmd a e)) = Comp (ArrLambda p (LeftE e)) (ppAction a)
 ppAction (Proc p (KCmd p' c)) = ppAction (Proc (Tuple [p, p']) c)
 ppAction (Proc p (DoCmd [DoSeq c])) = ppAction (Proc p c)
 ppAction (Proc p (DoCmd ((DoBind e c):ds))) = x
@@ -144,31 +144,32 @@ liftLambda id0 (AEither a1 a2) = (AEither a1' a2', env1 `M.union` env2, id2)
     (a2', env2, id2) = liftLambda id1 a2
 liftLambda id a = (a, M.empty, id)
 
-data MsgP = MsgP { msgPInv :: Bool, msgPat :: LExpr  }
-    deriving (Show, Eq)
-
 data Path a = Path{ pathAction :: a, pathMsgs :: [MsgP], choicePathMsgs :: [MsgP], pathYield :: Maybe Action }
   deriving Show
 
 newtype Paths a = Paths [Path a]
   deriving Show
 
+allPathMsgs :: Paths a -> String
+allPathMsgs (Paths ps) = unlines (map show ps')
+  where
+    ps' = map pathMsgs ps
+
 instance Functor Paths where
   fmap f (Paths ps) = Paths $ map (f <$>) ps
 
 instance Applicative Paths where
   pure a = Paths [pure a]
-  (<*>) :: Paths (a -> b) -> Paths a -> Paths b
-  (<*>) (Paths f) (Paths ps) = Paths $ zipWith (<*>) f ps
+  (<*>) (Paths fs) (Paths ps) = Paths $ concatMap (\f -> map (f <*>) ps) fs
 
 instance Monad Paths where
   -- Assume result of f is single path
   return = pure
   (>>=) :: Paths a -> (a -> Paths b) -> Paths b
-  (>>=) (Paths ps) f = 
+  (>>=) (Paths ps) f =
     Paths $ map g ps
     where
-      g p = 
+      g p =
         p >>= (\a ->
           case f a of
             Paths [p] -> p
@@ -209,14 +210,15 @@ choicePath choice p1@(Paths ps1) p2@(Paths ps2)
       yields = all (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
       mismatch = any (\ (Path _ _ _ y) -> isJust y) (ps1 ++ ps2)
 
-catPaths :: [Paths a] -> Paths a
+catPaths :: Show a => [Paths a] -> Paths a
 catPaths ((Paths ps1):pss) = Paths (ps1 ++ ps2)
   where (Paths ps2) = catPaths pss
 catPaths [] = Paths []
 
-reverseAction :: [LExpr] -> Action -> Paths Action
-reverseAction msgs a = Paths (filter noEmptyMsgs (map addSendsAndYields ps))
+reverseAction :: [MsgP] -> Action -> Paths Action
+reverseAction msgs a = Paths flattened
   where
+    flattened = map (\(Path a m c y) -> Path (flattenDo a) m c y) (filter noEmptyMsgs (map addSendsAndYields ps))
     Paths ps = reversiblePaths a
     noEmptyMsgs path = not (null (choicePathMsgs path) && null (pathMsgs path))
     addSendsAndYields path@(Path (Proc e (DoCmd ds)) p o y) =
@@ -229,7 +231,7 @@ reverseAction msgs a = Paths (filter noEmptyMsgs (map addSendsAndYields ps))
         ds'' = reverse ((dSeq:sends) ++ ds')
         hole = Var $ makeIdent "_"
         -- TODO in future could have sending be inverse of message bit
-        sends = map (DoBind (Tuple []) . ApplyCmd (Send False hole)) msgs
+        sends = map (\msg -> (DoBind (Tuple []) . ApplyCmd (Send (not (msgPInv msg)) hole)) (msgPat msg)) msgs
 
 reversiblePaths :: Action -> Paths Action
 reversiblePaths (Arr (Var x)) = pure $ ArrLambda arg (LeftE (App x False [arg]))
@@ -259,9 +261,9 @@ reversiblePaths (Proc e1 (ApplyCmd a0 e2)) = (\a -> Comp a (ArrLambda e3 (LeftE 
     ps = reversiblePaths a0
     (f_a, e3) = reverseInExp e2
 
-reversiblePaths (Proc e1 (DoCmd ds)) =
-    (\d ds' -> Proc _id (DoCmd ([d] ++ reverse ds' ++ [DoSeq (ApplyCmd idA e1)]))) <$> psFirst <*> pds
+reversiblePaths (Proc e1 (DoCmd ds)) = res
   where
+    res = (\d ds' -> Proc _id (DoCmd ([d] ++ reverse ds' ++ [DoSeq (ApplyCmd idA e1)]))) <$> psFirst <*> pds
   -- TODO This might clash with other variables...
     _id = Var $ makeIdent "_proc"
     DoSeq cmd = last ds
@@ -283,9 +285,10 @@ reverseDoAction (DoBind e1 (DoCmd ds)) = do
     psFirst = reverseDoAction (DoBind e1 cmd)
     pds = mapM reverseDoAction (init ds)
 reverseDoAction (DoBind (Var p) (CaseOfCmd e1 cs))
-  | identifier p == "_proc" = catPaths (map f cs)
+  | identifier p == "_proc" = paths
 
   where
+    paths = catPaths (map f cs)
     (f_a, e2) = reverseInExp e1
     cs' = map snd cs
     f :: (LExpr, CmdAction) -> Paths DoAction
@@ -300,9 +303,44 @@ reverseDoAction (DoSeq cmd) = error $ "Not possible to handle DoSeq not at end o
 reverseDoAction d = error $ "No case for " ++ show d
 
 reverseInExp :: LExpr -> (Action -> Action, LExpr)
-reverseInExp (App name inv args) = (f_a', exp)
+reverseInExp (App name inv args) = (f_a, argLast)
   where argLast = last args
         argInit = init args
-        f_a' a = f_a (Comp a (Arr (App name (not inv) argInit)))
-        (f_a, exp) = reverseInExp argLast
+        f_a a = Comp a (Arr (App name (not inv) argInit))
 reverseInExp exp = (id, exp)
+
+flattenDo :: Action -> Action
+-- Translate do-like arrow notation to pure arrow notation
+flattenDo (Proc p (ApplyCmd a e)) = Proc p (ApplyCmd (flattenDo a) e)
+flattenDo (Proc p (DoCmd ds)) = Proc p (DoCmd ds')
+  where ds' = concatMap flattenDo' ds
+flattenDo (Proc p (CaseOfCmd e cs)) = error "Have not defined case do flattening yet"
+
+-- Translate Arrow choice into pure arrow notation, ABoth is given
+flattenDo (ABoth a1 a2) = ABoth (flattenDo a1) (flattenDo a2)
+flattenDo (AEither a1 a2) = AEither (flattenDo a1) (flattenDo a2)
+flattenDo (ALeft a ) = flattenDo $ ABoth a idA
+flattenDo (ARight a ) = flattenDo $ ABoth idA a
+
+-- Propagate through rest
+flattenDo (Comp a1 a2) = Comp (flattenDo a1) (flattenDo a2)
+flattenDo (First a) = First (flattenDo a)
+flattenDo (Second a) = Second (flattenDo a)
+flattenDo a = a
+
+-- When reversing, nested do blocks are not inverted to become outer do blocks
+-- So instead need to flatten nested dos into same block to prevent context loss
+-- TODO need to improve this to be more robust
+flattenDo' :: DoAction -> [DoAction]
+flattenDo' (DoBind v1 ((ApplyCmd (Proc v2 (DoCmd ds)) v3)))
+  | v2 == v3 = rest ++ [DoBind v1 c]
+    where
+      (DoSeq c) = last ds
+      rest = init ds
+flattenDo' (DoBind v1 ((ApplyCmd (Comp (Proc v2 (DoCmd ds)) a) v3)))
+   | v2 == v3 = rest ++ [DoBind v4 c] ++ [DoBind v1 (ApplyCmd a v4)]
+    where
+      (DoSeq c) = last ds
+      rest = init ds
+      v4 = Var $ makeIdent "_d"
+flattenDo' d = [d]

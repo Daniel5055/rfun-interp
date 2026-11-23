@@ -9,7 +9,7 @@ import Text.Megaparsec
       getSourcePos,
       many, sepBy, sepBy1 )
 import Data.Void (Void)
-import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd, CaseOfCmd))
+import Actor.Ast (Actor (Actor), ActorType (ActorT), ActorClause (ActorClause), Action (..), ActorProgram, Def (ADef, FDef), DoAction (DoBind, DoSeq), CmdAction (ApplyCmd, DoCmd, CaseOfCmd), MsgP (MsgP, msgPat))
 import Ast
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char
@@ -47,9 +47,10 @@ pActorDefClause iTps = L.nonIndented scn $ L.lineFold scn p
             -- Parse message, TODO if empty this could be optional
             symbol ":"
             msg <- many pPat
+            let msg' = if msgPat (head msg) == Tuple [] then [] else msg
             symbol "="
             sc'
-            ActorClause idt msg <$> pAction
+            ActorClause idt msg' <$> pAction
 
 pActorType :: Parser (Ident, Maybe ActorType)
 pActorType = L.nonIndented scn p
@@ -89,7 +90,7 @@ pAction' = aParens <|> arr <|> first <|> second <|> send <|> spawn <|> yield <|>
         send = do
             symbol "send"
             inv <- optional $ symbol "!"
-            Send (isNothing inv) <$> (try pPat <|> return hole)
+            Send (isNothing inv) <$> (try pPat' <|> return hole)
         spawn = do
             symbol "spawn"
             inv <- optional $ symbol "!"
@@ -117,8 +118,14 @@ pApp = try (parens app) <|> var <?> "application-only lExpr"
                     inv <- optional $ symbol "!"
                     return $ App fun (isNothing inv) []
 
-pPat :: Parser LExpr
-pPat = constr <|> vari <|> int <|> listf <|> try (parens constrp) <|> try tuple <|> try listc <|> parLE <?> "pattern"
+pPat :: Parser MsgP
+pPat = do
+    exp <- pPat'
+    inv <- optional $ symbol "!"
+    return $ MsgP (isNothing inv) exp
+
+pPat' :: Parser LExpr
+pPat' = constr <|> vari <|> int <|> listf <|> try (parens constrp) <|> try tuple <|> try listc <|> parLE <?> "pattern"
   where
     int    = do Int <$> integer
     vari   = do var <- try pIdentifier <|> hole
@@ -126,15 +133,15 @@ pPat = constr <|> vari <|> int <|> listf <|> try (parens constrp) <|> try tuple 
     constr = do c <- pConstructor
                 return $ Constr c []
     constrp= do c <- pConstructor
-                vars <- many pPat
+                vars <- many pPat'
                 return $ Constr c vars
-    tuple  = do les <- parens $ pPat `sepBy` symbol ","
+    tuple  = do les <- parens $ pPat' `sepBy` symbol ","
                 return $ Tuple les
-    listc  = do les <- parens $ pPat `sepBy1` symbol ":"
+    listc  = do les <- parens $ pPat' `sepBy1` symbol ":"
                 return $ List $ foldr ListCons (ListEnd $ last les) (init les)
-    listf  = do les <- brackets $ pPat `sepBy` symbol ","
+    listf  = do les <- brackets $ pPat' `sepBy` symbol ","
                 return $ List $ foldr ListCons ListNil les
-    parLE  = parens pPat
+    parLE  = parens pPat'
     hole = symbol "_" >> return (makeIdent "_")
 
 -- Parse do notation

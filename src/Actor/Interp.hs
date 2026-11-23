@@ -7,7 +7,7 @@ import Control.Monad (liftM, ap)
 import System.Posix.Internals (rtsIsThreaded_)
 import Data.Foldable (find)
 import qualified Data.Map as M
-import Core.Interp (evalRMatchV, evalRMatchS, Substitution, Eval, runEval, idSub, failEval)
+import Core.Interp (evalRMatchS, Substitution, Eval, runEval, idSub, failEval)
 import qualified Core.Ast as C
 import Interp (tcValue, tcLExpr, interp)
 import Control.Applicative
@@ -18,7 +18,11 @@ import Debug.Trace
 
 type Addr = Integer
 data Msg = Msg { msgInv :: Bool, msgValue :: Value, msgAddr :: Addr }
-    deriving (Show, Eq)
+    deriving (Eq)
+
+instance Show Msg where
+    show (Msg inv val addr) = "( " ++ show val ++ (if inv then "" else "!") ++ " )"
+
 
 type Result = M.Map Addr Value
 
@@ -193,8 +197,8 @@ matchActors [] = (AS (-1) [] (IntV 0) undefined , undefined, undefined, [])
 
 matchActorClauses :: [Msg] -> [ActorClause] -> Eval ([Msg], Path Action, Substitution)
 matchActorClauses [] [ac] =
-    if aClauseMsgs ac == [Tuple []]
-        then return ([], Path (aClauseBody ac) (map (MsgP True) $ aClauseMsgs ac) [] Nothing, idSub)
+    if null (aClauseMsgs ac)
+        then return ([], Path (aClauseBody ac) (aClauseMsgs ac) [] Nothing, idSub)
         else failEval "No matching messages"
 matchActorClauses [] _ = failEval "No messages in inbox"
 matchActorClauses inbox (ac:acs) = matchActorClause ac <|> matchActorClauses inbox acs
@@ -214,7 +218,7 @@ matchActorClauses inbox [] = failEval "No matching messages"
 clausePatterns :: ActorClause -> Paths Action
 clausePatterns ac = Paths (forwardsPath:backwardsPaths)
     where
-        forwardsPath = Path (aClauseBody ac) (map (MsgP True) $ aClauseMsgs ac) [] Nothing
+        forwardsPath = Path (aClauseBody ac) (aClauseMsgs ac) [] Nothing
         Paths backwardsPaths = reverseAction (aClauseMsgs ac) (aClauseBody ac)
 
 matchPaths :: [Msg] -> Paths Action -> Eval ([Msg], Path Action, Substitution)
@@ -245,8 +249,8 @@ evalActor res = do
     (as, path, sub) <- nextActor
 
     traceM "----------------"
-    traceM $ "Found path for Actor " ++ show (aAddr as) ++ " with state " ++ show (aState as) 
-
+    traceM $ "Found path for Actor " ++ show (aAddr as) ++ " with state " ++ show (aState as) ++ " with messages: "
+    traceM $ unlines (map ( ("\t"++) . show) (pathMsgs path))
     let sub' = M.insert "self" (tcValue (IntV (aAddr as))) sub
     let a = (ppAction . subAction sub') (pathAction path)
     let (action, env, _) = liftLambda 0 a
@@ -326,7 +330,7 @@ evalAction (AEither a1 a2) c = do
     case val of
         ConstrV "_left" [v] -> return v
         ConstrV "_right" [v] -> return v
-evalAction a v = runtimeError $ "Missing eval action clause for " ++ show a
+evalAction a v = runtimeError $ "Missing eval action clause for " ++ show a ++ " and value " ++ show v
 
 -- Accepts a program, function or actor to run, and arguments
 -- Returns either an error, the return value of a function,
